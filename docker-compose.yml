@@ -1,0 +1,18 @@
+services:
+  med-safety-qa:
+    build: .
+    container_name: med-safety-qa
+    ports:
+      - "8000:8000"   # FastAPI + Swagger 文档
+      - "7860:7860"   # Gradio 演示 UI
+    environment:
+      HF_HOME: /app/.cache
+      API_BASE: http://127.0.0.1:8000
+    env_file:
+      - path: .env        # 配置 LLM_API_KEY 后自动切换在线模式
+        required: false
+    volumes:
+      - ./chroma_db:/app/chroma_db   # 向量索引持久化
+      - ./outputs:/app/outputs       # 日志/反馈持久化
+      - ./data:/app/data             # 知识库数据持久化
+    restart: unless-stopped

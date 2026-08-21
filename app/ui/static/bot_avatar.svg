@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 440" width="100%" height="100%">
+  <defs>
+    <radialGradient id="a" cx="50%" cy="55%" r="55%">
+      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.55"/>
+      <stop offset="60%" stop-color="#bae6fd" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#e0f2fe" stop-opacity="0.15"/>
+    </radialGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f0f9ff"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="200" cy="220" rx="180" ry="195" fill="url(#a)"/>
+  <ellipse cx="200" cy="408" rx="100" ry="12" fill="#7dd3fc" opacity="0.35"/>
+  <ellipse cx="200" cy="260" rx="120" ry="150" fill="url(#b)" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="200" cy="150" r="105" fill="url(#b)" stroke="#cbd5e1" stroke-width="2"/>
+  <rect x="196" y="30" width="8" height="45" rx="4" fill="#38bdf8"/>
+  <circle cx="200" cy="30" r="18" fill="#38bdf8"/>
+  <circle cx="200" cy="30" r="10" fill="#bae6fd"/>
+  <circle cx="200" cy="78" r="12" fill="#34d399"/>
+  <circle cx="200" cy="78" r="6" fill="#a7f3d0"/>
+  <path d="M115 125 Q155 115 180 125" stroke="#7dd3fc" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M220 125 Q245 115 285 125" stroke="#7dd3fc" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <ellipse cx="160" cy="150" rx="22" ry="26" fill="#1e293b"/>
+  <circle cx="165" cy="145" r="7" fill="#ffffff"/>
+  <circle cx="162" cy="152" r="4" fill="#38bdf8"/>
+  <ellipse cx="240" cy="150" rx="22" ry="26" fill="#1e293b"/>
+  <circle cx="245" cy="145" r="7" fill="#ffffff"/>
+  <circle cx="242" cy="152" r="4" fill="#38bdf8"/>
+  <ellipse cx="125" cy="185" rx="18" ry="12" fill="#fda4af" opacity="0.7"/>
+  <ellipse cx="275" cy="185" rx="18" ry="12" fill="#fda4af" opacity="0.7"/>
+  <path d="M170 195 Q200 220 230 195" stroke="#1e293b" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M85 270 Q60 300 75 340" stroke="#e2e8f0" stroke-width="26" stroke-linecap="round" fill="none"/>
+  <circle cx="75" cy="340" r="22" fill="#e0f2fe" stroke="#cbd5e1" stroke-width="1.5"/>
+  <path d="M315 270 Q340 300 325 340" stroke="#e2e8f0" stroke-width="26" stroke-linecap="round" fill="none"/>
+  <circle cx="325" cy="340" r="22" fill="#e0f2fe" stroke="#cbd5e1" stroke-width="1.5"/>
+  <rect x="160" y="290" width="80" height="80" rx="6" fill="#2563eb"/>
+  <rect x="192" y="305" width="16" height="50" fill="#ffffff"/>
+  <rect x="175" y="322" width="50" height="16" fill="#ffffff"/>
+  <polyline points="130,330 155,330 165,315 175,345 185,325 195,330 220,330 240,330 255,318 265,342 275,330 300,330"
+            stroke="#34d399" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M120 360 Q200 380 280 360" stroke="#bae6fd" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M135 380 Q200 398 265 380" stroke="#bae6fd" stroke-width="3" stroke-linecap="round" fill="none"/>
+</svg>

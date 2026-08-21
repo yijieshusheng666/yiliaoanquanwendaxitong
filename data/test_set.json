@@ -1,0 +1,299 @@
+[
+  {
+    "id": 1,
+    "type": "interaction",
+    "emergency": false,
+    "question": "布洛芬和阿司匹林能一起吃吗？",
+    "drugs": [
+      "布洛芬",
+      "阿司匹林"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "出血"
+  },
+  {
+    "id": 2,
+    "type": "interaction",
+    "emergency": false,
+    "question": "奥美拉唑和氯吡格雷能不能同时服用？",
+    "drugs": [
+      "奥美拉唑",
+      "氯吡格雷"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "抗血小板"
+  },
+  {
+    "id": 3,
+    "type": "interaction",
+    "emergency": false,
+    "question": "感冒灵和对乙酰氨基酚可以一起喝吗？",
+    "drugs": [
+      "感冒灵",
+      "对乙酰氨基酚"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "超量"
+  },
+  {
+    "id": 4,
+    "type": "interaction",
+    "emergency": false,
+    "question": "藿香正气水和头孢类抗生素能同服吗？",
+    "drugs": [
+      "藿香正气水"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "双硫仑"
+  },
+  {
+    "id": 5,
+    "type": "interaction",
+    "emergency": false,
+    "question": "多潘立酮和酮康唑能一起吃吗？",
+    "drugs": [
+      "多潘立酮",
+      "酮康唑"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "QT"
+  },
+  {
+    "id": 6,
+    "type": "interaction",
+    "emergency": false,
+    "question": "沙丁胺醇和普萘洛尔能同时用吗？",
+    "drugs": [
+      "沙丁胺醇",
+      "普萘洛尔"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "拮抗"
+  },
+  {
+    "id": 7,
+    "type": "interaction",
+    "emergency": false,
+    "question": "氨茶碱和红霉素同服会不会有问题？",
+    "drugs": [
+      "氨茶碱",
+      "红霉素"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "血药浓度"
+  },
+  {
+    "id": 8,
+    "type": "interaction",
+    "emergency": false,
+    "question": "蒙脱石散和左氧氟沙星能一起吃吗？",
+    "drugs": [
+      "蒙脱石散",
+      "左氧氟沙星"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "间隔"
+  },
+  {
+    "id": 9,
+    "type": "population",
+    "emergency": false,
+    "question": "孕妇能喝藿香正气水吗？",
+    "drugs": [
+      "藿香正气水"
+    ],
+    "expected_section": "特殊人群用药",
+    "answer_key": "孕妇禁用"
+  },
+  {
+    "id": 10,
+    "type": "population",
+    "emergency": false,
+    "question": "儿童感冒发热可以服用阿司匹林吗？",
+    "drugs": [
+      "阿司匹林"
+    ],
+    "expected_section": "特殊人群用药",
+    "answer_key": "瑞氏综合征"
+  },
+  {
+    "id": 11,
+    "type": "population",
+    "emergency": false,
+    "question": "老年人吃布洛芬要注意什么？",
+    "drugs": [
+      "布洛芬"
+    ],
+    "expected_section": "特殊人群用药",
+    "answer_key": "减量"
+  },
+  {
+    "id": 12,
+    "type": "population",
+    "emergency": false,
+    "question": "哺乳期可以吃氯雷他定吗？",
+    "drugs": [
+      "氯雷他定"
+    ],
+    "expected_section": "特殊人群用药",
+    "answer_key": "慎用"
+  },
+  {
+    "id": 13,
+    "type": "population",
+    "emergency": false,
+    "question": "肝功能不好的人能长期吃对乙酰氨基酚吗？",
+    "drugs": [
+      "对乙酰氨基酚"
+    ],
+    "expected_section": "禁忌",
+    "answer_key": "禁用"
+  },
+  {
+    "id": 14,
+    "type": "population",
+    "emergency": false,
+    "question": "高血压患者感冒了能吃感冒灵颗粒吗？",
+    "drugs": [
+      "感冒灵"
+    ],
+    "expected_section": "注意事项",
+    "answer_key": "慎用"
+  },
+  {
+    "id": 15,
+    "type": "usage",
+    "emergency": false,
+    "question": "蒙脱石散应该怎么吃？",
+    "drugs": [
+      "蒙脱石散"
+    ],
+    "expected_section": "用法用量",
+    "answer_key": "温水"
+  },
+  {
+    "id": 16,
+    "type": "usage",
+    "emergency": false,
+    "question": "奥美拉唑肠溶胶囊是饭前吃还是饭后吃？",
+    "drugs": [
+      "奥美拉唑"
+    ],
+    "expected_section": "用法用量",
+    "answer_key": "空腹"
+  },
+  {
+    "id": 17,
+    "type": "usage",
+    "emergency": false,
+    "question": "双歧杆菌三联活菌胶囊应该怎么保存和服用？",
+    "drugs": [
+      "双歧杆菌"
+    ],
+    "expected_section": "用法用量",
+    "answer_key": "冷藏"
+  },
+  {
+    "id": 18,
+    "type": "usage",
+    "emergency": false,
+    "question": "沙丁胺醇气雾剂怎么使用？",
+    "drugs": [
+      "沙丁胺醇"
+    ],
+    "expected_section": "用法用量",
+    "answer_key": "揿"
+  },
+  {
+    "id": 19,
+    "type": "usage",
+    "emergency": false,
+    "question": "布洛芬混悬液儿童一次喝多少？",
+    "drugs": [
+      "布洛芬"
+    ],
+    "expected_section": "用法用量",
+    "answer_key": "体重"
+  },
+  {
+    "id": 20,
+    "type": "emergency",
+    "emergency": true,
+    "question": "老人突然胸痛、大汗淋漓，能吃硝酸甘油吗？"
+  },
+  {
+    "id": 21,
+    "type": "emergency",
+    "emergency": true,
+    "question": "孩子吃了很多安眠药，现在昏迷不醒怎么办？"
+  },
+  {
+    "id": 22,
+    "type": "emergency",
+    "emergency": true,
+    "question": "服药后出现呼吸困难、嘴唇发紫是不是中毒了？"
+  },
+  {
+    "id": 23,
+    "type": "emergency",
+    "emergency": true,
+    "question": "病人突然抽搐口吐白沫，要怎么办？"
+  },
+  {
+    "id": 24,
+    "type": "emergency",
+    "emergency": true,
+    "question": "喝了农药后大出血昏迷，还能洗胃吗？"
+  },
+  {
+    "id": 25,
+    "type": "emergency",
+    "emergency": true,
+    "question": "吃错药后出现休克、血压测不到，紧急处理是什么？"
+  },
+  {
+    "id": 26,
+    "type": "emergency",
+    "emergency": true,
+    "question": "有人想自杀吃了过量药物，现在没意识了！"
+  },
+  {
+    "id": 27,
+    "type": "emergency",
+    "emergency": true,
+    "question": "胸口剧痛伴窒息感，是不是心梗，需要立即做什么？"
+  },
+  {
+    "id": 28,
+    "type": "general",
+    "emergency": false,
+    "question": "布洛芬缓释胶囊的适应症是什么？",
+    "drugs": [
+      "布洛芬"
+    ],
+    "expected_section": "适应症",
+    "answer_key": "疼痛"
+  },
+  {
+    "id": 29,
+    "type": "general",
+    "emergency": false,
+    "question": "感冒灵颗粒里面都含有什么成分？",
+    "drugs": [
+      "感冒灵"
+    ],
+    "expected_section": "成分",
+    "answer_key": "对乙酰氨基酚"
+  },
+  {
+    "id": 30,
+    "type": "general",
+    "emergency": false,
+    "question": "板蓝根颗粒的适应症是什么？",
+    "drugs": [
+      "板蓝根"
+    ],
+    "expected_section": "适应症",
+    "answer_key": "咽喉肿痛"
+  }
+]
