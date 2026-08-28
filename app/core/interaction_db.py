@@ -83,9 +83,6 @@ def get_interaction_db() -> InteractionDB:
     return _db
 
 
-RISK_LEVEL = {"高": 3, "中": 2, "低": 1}
-
-
 def risk_text(level: str) -> str:
     return {"高": "高风险（禁止或强烈不建议合用）",
             "中": "中风险（慎用，需医生评估）",

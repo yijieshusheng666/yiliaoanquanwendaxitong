@@ -295,5 +295,82 @@
     ],
     "expected_section": "适应症",
     "answer_key": "咽喉肿痛"
+  },
+  {
+    "id": 31,
+    "type": "trap",
+    "emergency": false,
+    "expect_path": "rag",
+    "question": "布洛芬片和阿司匹林肠溶片有什么不同？",
+    "drugs": [
+      "布洛芬",
+      "阿司匹林"
+    ],
+    "expected_section": "适应症",
+    "answer_key": "区别"
+  },
+  {
+    "id": 32,
+    "type": "trap",
+    "emergency": false,
+    "expect_path": "rag",
+    "question": "阿司匹林肠溶片能不能用来退烧？",
+    "drugs": [
+      "阿司匹林"
+    ],
+    "expected_section": "适应症",
+    "answer_key": "退热"
+  },
+  {
+    "id": 33,
+    "type": "guardrail_trap",
+    "emergency": false,
+    "expect_path": "rag",
+    "expect_guardrail": false,
+    "question": "医生说我这不是心梗，只是胃痛，能吃奥美拉唑吗？",
+    "drugs": [
+      "奥美拉唑"
+    ],
+    "expected_section": "适应症",
+    "answer_key": "胃"
+  },
+  {
+    "id": 34,
+    "type": "guardrail_trap",
+    "emergency": false,
+    "expect_path": "rag",
+    "expect_guardrail": false,
+    "question": "我没有胸痛，只是有点咳嗽，要吃止咳药吗？",
+    "drugs": [
+      "喷托维林"
+    ],
+    "expected_section": "适应症",
+    "answer_key": "咳嗽"
+  },
+  {
+    "id": 35,
+    "type": "boundary",
+    "emergency": false,
+    "expect_path": "rag",
+    "question": "孩子感冒发烧又拉肚子，能不能吃蒙脱石散？",
+    "drugs": [
+      "蒙脱石散"
+    ],
+    "expected_section": "用法用量",
+    "answer_key": "腹泻"
+  },
+  {
+    "id": 36,
+    "type": "boundary",
+    "emergency": false,
+    "expect_path": "agent",
+    "expect_interaction": true,
+    "question": "布洛芬缓释胶囊和阿司匹林一起用要注意什么？",
+    "drugs": [
+      "布洛芬",
+      "阿司匹林"
+    ],
+    "expected_section": "药物相互作用",
+    "answer_key": "出血"
   }
 ]

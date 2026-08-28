@@ -1,11 +1,8 @@
-"""PDF 说明书解析与语义分块。
+"""说明书文本解析与语义分块。
 
 分块规则：按【章节】切分（适应症/用法用量/禁忌/注意事项/药物相互作用/特殊人群用药…），
 每个分块携带元数据 drug（药品名）与 section（章节名），供精准检索与溯源展示。
 超长章节按句边界二次切分，保证单块长度可控。
-
-说明：说明书同时生成 .txt 副本；当 PDF 文本抽取失败（如字体子集不兼容）时，
-自动回退读取 .txt 副本，保证分块流程跨平台稳定。
 """
 from __future__ import annotations
 
@@ -13,32 +10,12 @@ import re
 from pathlib import Path
 from typing import Iterator, List, Tuple
 
-from app.config import CHUNK_MAX_CHARS, PDF_DIR, TEXT_DIR
+from app.config import CHUNK_MAX_CHARS, TEXT_DIR
 
 SECTION_RE = re.compile(r"【([^】]+)】")
 
 # 无需进入知识库的章节（贮藏信息有用，保留）
 SKIP_SECTIONS = {"药品名称", "规格"}
-
-
-def parse_pdf(path: Path) -> List[Tuple[str, str]]:
-    """从 PDF 抽取 [(章节名, 内容)]；抽取失败回退 .txt 副本。"""
-    from pypdf import PdfReader
-
-    text_parts = []
-    try:
-        reader = PdfReader(str(path))
-        for page in reader.pages:
-            text_parts.append(page.extract_text() or "")
-    except Exception:
-        text_parts = []
-    raw = "\n".join(text_parts)
-    if not SECTION_RE.search(raw):
-        # 回退到同名的机器可读文本副本
-        txt = TEXT_DIR / (path.stem + ".txt")
-        if txt.exists():
-            raw = txt.read_text(encoding="utf-8")
-    return split_sections(raw)
 
 
 def parse_txt(path: Path) -> List[Tuple[str, str]]:

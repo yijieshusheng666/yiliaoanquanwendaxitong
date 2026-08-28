@@ -36,7 +36,7 @@ def ensure_index():
 def start_gradio():
     from app.ui.gradio_app import build_ui
     print("[3/3] Gradio UI 启动中: http://127.0.0.1:7860")
-    build_ui().launch(server_name="0.0.0.0", server_port=7860)
+    build_ui().queue().launch(server_name="0.0.0.0", server_port=7860)
 
 
 def start_api():

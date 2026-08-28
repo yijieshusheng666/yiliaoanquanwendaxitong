@@ -2,7 +2,9 @@
 
 设计要点：
 - 独立于大模型与检索，规则命中即拦截，保证「急症拦截率 100%」。
-- 宁可误拦（安全优先），不漏拦。
+- 保守否定豁免：急症关键词**紧邻前方**出现「不是/没有/并非」等完全否定语时才不拦截
+  （如"医生说我这不是心梗"），且排除「是不是/是不是」疑问歧义，降低非急症语境误报
+  的同时保持对真实急症 100% 拦截。
 """
 from __future__ import annotations
 
@@ -17,15 +19,37 @@ EMERGENCY_KEYWORDS = [
     "心跳骤停", "心搏骤停",                       # 心跳呼吸骤停
 ]
 
-# 高危词误伤豁免：当急症关键词出现在以下「否定/非急症」语境时不拦截（如"……不是……"）
-# 为保持简单与 100% 拦截率，暂不做豁免，靠关键词精确性控制误报。
+# 完全否定语（按长度降序，长词优先匹配）；必须紧邻急症关键词前才生效
+_NEGATIONS = ("并不是", "并没有", "并非", "并未", "没有", "不是", "没")
+# 「不是」前面紧邻这些字时不是否定，而是疑问/条件（"是不是/是不是"），不豁免
+_AMBIGUOUS_PREFIX = ("是", "可", "不")
 
 
 def check_emergency(text: str) -> str | None:
-    """若命中急症关键词返回命中的词，否则返回 None。"""
+    """若命中急症关键词返回命中的词，否则返回 None（保守否定语境豁免）。"""
     if not text:
         return None
     for kw in EMERGENCY_KEYWORDS:
-        if kw in text:
-            return kw
+        idx = text.find(kw)
+        if idx == -1:
+            continue
+        if _negated_before(text, idx):
+            continue
+        return kw
     return None
+
+
+def _negated_before(text: str, idx: int) -> bool:
+    """急症关键词紧邻前方是否为完全否定语（排除「是不是/可不可以」疑问）。"""
+    for neg in _NEGATIONS:
+        start = idx - len(neg)
+        if start < 0:
+            continue
+        if text[start:idx] != neg:
+            continue
+        # 否定语前紧邻疑问/条件字（是/可/不）→ 是「是不是中毒」类疑问，不豁免
+        prev = text[start - 1] if start > 0 else ""
+        if neg == "不是" and prev in _AMBIGUOUS_PREFIX:
+            return False
+        return True
+    return False

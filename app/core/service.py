@@ -168,12 +168,23 @@ def _build_agent_tools():
         StructuredTool.from_function(
             func=_tool_lookup,
             name="query_drug_interaction",
-            description="当用户询问两种药物能否同服/一起服用/同时使用时调用，参数为包含两种药品名的文本，返回风险等级与说明。",
+            description=(
+                "触发条件：用户明确询问两种及以上药物能否同服/一起服用/同时使用时调用，"
+                "参数为包含两种药品名的文本。\n"
+                "返回风险等级（高/中/低）与说明。\n"
+                "不适用边界：仅问单个药物的用法/禁忌/适应症时不调用；"
+                "药名不在知识库（如中成药、未收录药物）时返回「未找到记录」，可直接采信，"
+                "不要编造风险等级。"),
         ),
         StructuredTool.from_function(
             func=_tool_retrieve,
             name="retrieve_drug_knowledge",
-            description="检索药品说明书知识库，参数为用药问题文本，返回带【来源:药品名·章节】标注的相关说明书条目。",
+            description=(
+                "触发条件：需要查证单药的适应症/用法用量/禁忌/注意事项/特殊人群用药/成分/"
+                "不良反应等说明书内容时调用，参数为用药问题文本。\n"
+                "返回带【来源:药品名·章节】标注的相关说明书条目。\n"
+                "不适用边界：两种药品相互作用的优先级低于 query_drug_interaction，"
+                "应先查相互作用；检索结果不足时如实说明，不要凭记忆补全。"),
         ),
     ]
 

@@ -58,6 +58,3 @@ EMERGENCY_RESPONSE = (
     "在等待救援期间：保持患者平卧、保持呼吸道通畅，切勿自行喂药或喂水。"
 )
 DISCLAIMER = "\n\n---\n*免责声明：以上内容仅供学习参考，不构成医疗建议。用药请遵医嘱，如有不适请及时就医。*"
-
-# ---------- LangSmith（可选） ----------
-LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"

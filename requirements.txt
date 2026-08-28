@@ -12,8 +12,7 @@ sentence-transformers==3.4.1
 #   Linux  : pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch>=2.2.0
 
-# ===== PDF 解析 / 生成 =====
-pypdf==5.4.0
+# ===== PDF 生成 =====
 reportlab==4.2.5
 
 # ===== 后端 =====
@@ -27,7 +26,6 @@ gradio==5.38.0
 
 # ===== 工具 =====
 httpx==0.28.1
-pandas==2.2.3
 pytest==8.3.5
 # 嵌入模型下载兜底（HuggingFace 不可达时使用 ModelScope）
 modelscope>=1.39.0

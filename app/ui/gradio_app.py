@@ -1,11 +1,11 @@
-"""Gradio 前端：首页（大图标入口）+ 对话 UI + 引用溯源 + 反馈按钮。
+"""Gradio 前端：首页（大图标入口）+ 对话 UI + 引用溯源 + 满意度评价。
 
 通过 HTTP 调用 FastAPI（/api/chat SSE 流式）实现问答；
-点赞/点踩通过 /api/feedback 记录到本地 JSON 文件。
+会话历史由服务端 SQLite 管理（新建/切换/删除）；
+满意度反馈通过 /api/feedback 记录，用于后续优化回答质量。
 """
 from __future__ import annotations
 
-import html
 import json
 import os
 
@@ -14,10 +14,10 @@ import httpx
 
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")
 
-# 头像路径（放在项目根目录，Gradio 可直接 serve 本地文件）
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-BOT_AVATAR = os.path.join(_PROJECT_ROOT, "bot_avatar.svg")
-USER_AVATAR = os.path.join(_PROJECT_ROOT, "user_avatar.svg")
+# 头像路径（放在 app/ui/static/ 目录，Gradio 可直接 serve 本地文件）
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+BOT_AVATAR = os.path.join(_STATIC_DIR, "bot_avatar.svg")
+USER_AVATAR = os.path.join(_STATIC_DIR, "user_avatar.svg")
 
 # ========== 首页机器人 SVG（居中大图标，点击进入聊天） ==========
 # 给眼睛/心跳线/天线加 id 以便 CSS 动画驱动
@@ -106,16 +106,6 @@ LANDING_HTML = f"""
 """
 
 
-def _feedback_html(question: str) -> str:
-    q = html.escape(question or "", quote=True)
-    return (
-        f'<div class="qa-fb" data-q="{q}">'
-        f'<button type="button" class="qfb" data-v="1" title="有帮助">👍</button>'
-        f'<button type="button" class="qfb" data-v="-1" title="没帮助">👎</button>'
-        f"</div>"
-    )
-
-
 def _sources_text(sources) -> str:
     if not sources:
         return ""
@@ -125,101 +115,188 @@ def _sources_text(sources) -> str:
     return "\n".join(lines)
 
 
-def respond(message: str, history):
-    hist_req = [{"role": h["role"], "content": h["content"]}
-                for h in history[-6:]]
+def respond(message: str, history, sid: str = ""):
+    """流式问答。历史由服务端 SQLite 管理（多会话），此处仅渲染。
+    消息保持纯文本（引用来源用 Markdown），避免 HTML 混排导致的渲染错位。
+    回复完成后在最新回复下方显示满意度评价按钮，评价后隐藏。"""
+    history = list(history or []) + [{"role": "user", "content": message}]
+    yield history, gr.update(value=""), gr.update(visible=False), gr.update()
     partial, sources = "", []
-    with httpx.Client(timeout=180) as client:
-        with client.stream(
-            "POST", f"{API_BASE}/api/chat",
-            json={"question": message, "history": hist_req, "stream": True},
-        ) as resp:
-            for line in resp.iter_lines():
-                if not line or not line.startswith("data: "):
-                    continue
-                ev = json.loads(line[len("data: "):])
-                t = ev["type"]
-                if t == "token":
-                    partial += ev["content"]
-                    yield partial
-                elif t == "emergency":
-                    partial = ev["content"]
-                    yield partial
-                elif t == "sources":
-                    sources = ev["sources"]
-                elif t == "error":
-                    partial += f"\n\n> ⚠️ 生成出错：{ev['message']}"
-                    yield partial
-                elif t == "done":
-                    partial += _sources_text(sources)
-                    yield partial
+    try:
+        with httpx.Client(timeout=180) as client:
+            with client.stream(
+                "POST", f"{API_BASE}/api/chat",
+                json={"question": message, "session_id": sid, "stream": True},
+            ) as resp:
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    ev = json.loads(line[len("data: "):])
+                    t = ev["type"]
+                    if t == "token":
+                        partial += ev["content"]
+                    elif t == "emergency":
+                        partial = ev["content"]
+                    elif t == "sources":
+                        sources = ev["sources"]
+                    elif t == "error":
+                        partial += f"\n\n> ⚠️ 生成出错：{ev['message']}"
+                    if history and history[-1]["role"] == "assistant":
+                        history[-1] = {"role": "assistant", "content": partial}
+                    else:
+                        history = history + [{"role": "assistant", "content": partial}]
+                    yield history, gr.update(), gr.update(visible=False), gr.update()
+    except Exception as exc:
+        partial += f"\n\n> ⚠️ 服务异常：{exc}"
     if partial:
-        yield partial + _feedback_html(message)
+        if sources:
+            partial += "\n\n" + _sources_text(sources)
+        if history and history[-1]["role"] == "assistant":
+            history[-1] = {"role": "assistant", "content": partial}
+        else:
+            history = history + [{"role": "assistant", "content": partial}]
+    yield (history, gr.update(), gr.update(visible=bool(partial)),
+           {"question": message, "answer": partial})
 
 
-# 前端 JS：反馈提交 + 首页点击机器人进入聊天 + 清空确认
+def _fmt_conv(conv: dict) -> str:
+    """会话下拉项文案：标题 + 时间。"""
+    import datetime
+    ts = datetime.datetime.fromtimestamp(conv["updated_at"])
+    return f"{conv['title']}（{ts.strftime('%m-%d %H:%M')}）"
 
-_FEEDBACK_JS = f"""
-window.__API_BASE__ = "{API_BASE}";
-(function () {{
-  function toast(msg) {{
-    var t = document.createElement("div");
-    t.textContent = msg;
-    t.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);" +
-      "background:rgba(17,24,39,.92);color:#fff;padding:8px 18px;border-radius:8px;" +
-      "z-index:99999;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.2);";
-    document.body.appendChild(t);
-    setTimeout(function () {{ t.remove(); }}, 2500);
-  }}
-  function record(q, a, rating) {{
-    try {{
-      fetch(window.__API_BASE__ + "/api/feedback", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ question: q, answer: a, rating: rating, session_id: "web-ui" }})
-      }}).then(function (r) {{ return r.json(); }})
-        .then(function () {{ toast("✅ 已记录你的反馈，感谢支持！"); }})
-        .catch(function () {{ toast("⚠️ 反馈服务不可用"); }});
-    }} catch (e) {{ toast("⚠️ 反馈提交失败"); }}
-  }}
-  document.addEventListener("click", function (e) {{
-    var b = e.target && e.target.closest && e.target.closest(".qfb");
-    if (!b) return;
-    e.preventDefault();
-    var wrap = b.closest(".qa-fb");
-    var row = wrap ? wrap.parentElement : null;
-    var question = wrap ? (wrap.getAttribute("data-q") || "") : "";
-    var answer = row ? row.textContent.replace(/[👍👎已记录]/g, "").trim() : "";
-    var rating = b.getAttribute("data-v") === "1" ? 1 : -1;
-    record(question, answer, rating);
-  }});
-  // 删除/清空聊天记录前弹窗确认
-  document.addEventListener("click", function (e) {{
+
+def _fetch_conversations() -> list:
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(f"{API_BASE}/api/conversations")
+            resp.raise_for_status()
+            return resp.json().get("conversations", [])
+    except Exception:
+        return []
+
+
+def _fetch_messages(sid: str) -> list:
+    if not sid:
+        return []
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                f"{API_BASE}/api/history", params={"session_id": sid})
+            resp.raise_for_status()
+            return resp.json().get("history", [])
+    except Exception:
+        return []
+
+
+def _init_ui():
+    """页面加载：拉取会话列表，默认打开最近更新的会话并恢复其消息。
+    返回 (会话列表 Radio 的 choices+value 更新, 当前会话ID, 聊天消息, 评价按钮行)。"""
+    convs = _fetch_conversations()
+    cur = convs[0] if convs else None
+    choices = [(_fmt_conv(c), c["id"]) for c in convs]
+    value = cur["id"] if cur else None
+    msgs = _fetch_messages(cur["id"]) if cur else []
+    return (
+        gr.update(choices=choices, value=value),
+        cur["id"] if cur else "",
+        msgs,
+        gr.update(visible=False),
+    )
+
+
+def _new_conversation():
+    """新建对话并清空聊天区。"""
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(f"{API_BASE}/api/conversations")
+            resp.raise_for_status()
+            new_id = resp.json()["session_id"]
+    except Exception:
+        new_id = ""
+    convs = _fetch_conversations()
+    if new_id:
+        # 重新拉列表会让新会话按 updated_at 排到最前（与后端一致）
+        cur = next((c for c in convs if c["id"] == new_id), None)
+        convs = ([cur] + [c for c in convs if c["id"] != new_id]) if cur else convs
+    choices = [(_fmt_conv(c), c["id"]) for c in convs]
+    return (
+        gr.update(choices=choices, value=new_id if new_id else None),
+        new_id,
+        [],
+        gr.update(visible=False),
+    )
+
+
+def _select_conversation(sid: str):
+    """切换会话：加载该会话的全部消息，并隐藏评价按钮。"""
+    return _fetch_messages(sid), gr.update(visible=False)
+
+
+def _delete_conversation(cur_sid: str):
+    """删除当前会话，随后自动打开列表中最新的会话。"""
+    if not cur_sid:
+        return (gr.update(choices=[], value=None), "", [], gr.update(visible=False))
+    try:
+        with httpx.Client(timeout=10) as client:
+            client.delete(f"{API_BASE}/api/conversations/{cur_sid}")
+    except Exception:
+        pass
+    convs = _fetch_conversations()
+    choices = [(_fmt_conv(c), c["id"]) for c in convs]
+    nxt = convs[0] if convs else None
+    msgs = _fetch_messages(nxt["id"]) if nxt else []
+    return (
+        gr.update(choices=choices, value=nxt["id"] if nxt else None),
+        nxt["id"] if nxt else "",
+        msgs,
+        gr.update(visible=False),
+    )
+
+
+def _rate(rating: int, last_qa: dict | None, sid: str):
+    """评价最新回复（1 满意 / -1 不满意）。
+    评价成功后隐藏按钮行；新回复完成后由 respond 再次显示。"""
+    if not last_qa or not last_qa.get("answer"):
+        gr.Warning("暂无可评价的回复，请先完成一次问答")
+        return gr.update(visible=False)
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(
+                f"{API_BASE}/api/feedback",
+                json={"question": last_qa["question"],
+                      "answer": last_qa.get("answer", ""),
+                      "rating": rating, "session_id": sid or ""},
+            )
+            resp.raise_for_status()
+        gr.Info("✅ 已记录反馈，感谢你的评价！"
+                if rating == 1 else "✅ 已记录反馈，我们会持续改进！")
+    except Exception:
+        gr.Warning("⚠️ 反馈服务不可用，请稍后再试")
+        return gr.update(visible=True)
+    return gr.update(visible=False)
+
+
+# 前端 JS：删除会话确认弹窗
+_FEEDBACK_JS = """
+(function () {
+  document.addEventListener("click", function (e) {
     if (!e.target || !e.target.closest) return;
     var btn = e.target.closest("button");
     if (!btn) return;
     var label = (btn.getAttribute("aria-label") || btn.getAttribute("title") || btn.textContent || "").trim();
-    if (/清空对话|清空|删除|clear|delete/i.test(label)) {{
-      if (!window.confirm("确定要删除聊天记录吗？此操作不可恢复。")) {{
+    if (/删除对话|删除|删除会话/i.test(label)) {
+      if (!window.confirm("确定要删除这个对话吗？此操作不可恢复。")) {
         e.stopImmediatePropagation();
         e.preventDefault();
         e.stopPropagation();
-      }}
-    }}
-  }}, true);
-}})();
+      }
+    }
+  }, true);
+})();
 """
 
 _FEEDBACK_CSS = """
-.qa-fb { display:flex; flex-direction:row; gap:6px; margin-top:10px; opacity:1; visibility:visible; }
-.qa-fb .qfb {
-    border:1px solid var(--border-color-primary,#d0d7de);
-    background:var(--button-secondary-background-fill,#fff);
-    border-radius:999px; font-size:14px; line-height:1; padding:4px 10px; cursor:pointer;
-    transition:transform .12s ease, box-shadow .12s ease;
-}
-.qa-fb .qfb:hover { transform:translateY(-1px); box-shadow:0 1px 4px rgba(0,0,0,.12); }
-
 /* ========== 首页布局 ========== */
 #landing-col {
     min-height: 80vh !important;
@@ -375,10 +452,10 @@ def _enter_chat():
 
 
 def _back_home():
+    """返回首页：保留当前会话展示，不清空聊天记录。"""
     return (
         gr.update(visible=True),
         gr.update(visible=False),
-        [],
     )
 
 
@@ -405,43 +482,105 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     "# 💊 医疗安全问答系统\n"
                     "基于 **RAG + Agent** 的用药安全问答：药物相互作用、特定人群用药、用法用量。\n"
-                    "每条回答均**标注引用来源**，遇急症关键词直接提示 **拨打 120**。\n"
-                    "💡 可以直接在回答消息底部点击 👍 / 👎 提交反馈。"
+                    "每条回答均**标注引用来源**，遇急症关键词直接提示 **拨打 120**。"
                 )
             back_btn = gr.Button("← 返回首页", size="sm", variant="secondary")
-            chatbot = gr.Chatbot(
-                type="messages",
-                sanitize_html=False,
-                height=520,
-                avatar_images=(USER_AVATAR, BOT_AVATAR),
+
+            # ===== 主区域：左侧会话列表 + 右侧聊天 =====
+            with gr.Row():
+                with gr.Column(scale=1, min_width=230):
+                    new_btn = gr.Button("➕ 新建对话", variant="primary")
+                    conv_list = gr.Radio(
+                        label="🗂 历史对话",
+                        choices=[],
+                        interactive=True,
+                        elem_id="conv-list",
+                    )
+                    del_btn = gr.Button("🗑 删除当前对话", variant="secondary")
+                with gr.Column(scale=4):
+                    chatbot = gr.Chatbot(
+                        type="messages",
+                        sanitize_html=False,
+                        height=460,
+                        avatar_images=(USER_AVATAR, BOT_AVATAR),
+                    )
+                    with gr.Row(visible=False) as rate_row:
+                        like_btn = gr.Button("👍 满意", size="sm")
+                        dislike_btn = gr.Button("👎 不满意", size="sm")
+                    with gr.Row():
+                        msg_box = gr.Textbox(
+                            placeholder="输入你的用药问题（例如：布洛芬和阿司匹林能一起吃吗？咳嗽用什么药？）",
+                            container=False,
+                            scale=8,
+                        )
+                        send_btn = gr.Button("发送", variant="primary", scale=1)
+
+            cur_sid = gr.State("")
+            last_qa = gr.State({})
+
+            # ===== 事件：会话管理 + 问答 + 满意度评价 =====
+            demo.load(
+                _init_ui,
+                inputs=None,
+                outputs=[conv_list, cur_sid, chatbot, rate_row],
             )
-            gr.ChatInterface(
-                fn=respond,
-                type="messages",
-                title="",
-                description="输入你的用药问题（例如：布洛芬和阿司匹林能一起吃吗？咳嗽用什么药？）",
-                chatbot=chatbot,
+            new_btn.click(
+                _new_conversation,
+                inputs=None,
+                outputs=[conv_list, cur_sid, chatbot, rate_row],
+            )
+            conv_list.select(
+                _select_conversation,
+                inputs=[conv_list],
+                outputs=[chatbot, rate_row],
+            )
+            conv_list.select(
+                lambda sid: sid or "",
+                inputs=[conv_list],
+                outputs=[cur_sid],
+            )
+            del_btn.click(
+                _delete_conversation,
+                inputs=[cur_sid],
+                outputs=[conv_list, cur_sid, chatbot, rate_row],
+            )
+            send_btn.click(
+                respond,
+                inputs=[msg_box, chatbot, cur_sid],
+                outputs=[chatbot, msg_box, rate_row, last_qa],
+            )
+            msg_box.submit(
+                respond,
+                inputs=[msg_box, chatbot, cur_sid],
+                outputs=[chatbot, msg_box, rate_row, last_qa],
+            )
+            like_btn.click(
+                _rate,
+                inputs=[gr.State(1), last_qa, cur_sid],
+                outputs=[rate_row],
+            )
+            dislike_btn.click(
+                _rate,
+                inputs=[gr.State(-1), last_qa, cur_sid],
+                outputs=[rate_row],
             )
             gr.Markdown(
                 "---\n"
                 "*免责声明：系统回答仅供学习参考，不构成医疗建议。用药请遵医嘱，如有不适请及时就医。*\n"
-                "*数据来源：《本草纲目》、国家基本药物处方集、国家基本药物临床应用指南。*"
-            )
-
-        # 事件绑定：进入聊天
+                "*数据来源：《本草纲目》、国家基本药物处方集、国家基本药物临床应用指南。*")
+        # 事件绑定：进入聊天 / 返回首页
         enter_btn.click(
             _enter_chat,
             inputs=None,
             outputs=[landing_page, chat_page],
         )
-        # 返回首页
         back_btn.click(
             _back_home,
             inputs=None,
-            outputs=[landing_page, chat_page, chatbot],
+            outputs=[landing_page, chat_page],
         )
     return demo
 
 
 if __name__ == "__main__":
-    build_ui().launch(server_name="0.0.0.0", server_port=7860)
+    build_ui().queue().launch(server_name="0.0.0.0", server_port=7860)

@@ -30,6 +30,14 @@ NORMAL_QUESTIONS = [
     "感冒灵颗粒里面都含有什么成分？",
 ]
 
+# 否定语境诱饵：含急症关键词但明确否定，不应拦截
+NEGATED_QUESTIONS = [
+    "医生说我这不是心梗，只是胃痛，能吃奥美拉唑吗？",
+    "我没有胸痛，只是有点咳嗽，要吃止咳药吗？",
+    "检查过了不是中毒，就是普通肠胃炎，吃什么药？",
+    "病人并不是昏迷，是睡着了，需要叫醒吗？",
+]
+
 
 @pytest.mark.parametrize("q", EMERGENCY_QUESTIONS)
 def test_emergency_intercepted(q):
@@ -39,6 +47,11 @@ def test_emergency_intercepted(q):
 @pytest.mark.parametrize("q", NORMAL_QUESTIONS)
 def test_normal_not_intercepted(q):
     assert check_emergency(q) is None, f"不应误拦普通问题: {q}"
+
+
+@pytest.mark.parametrize("q", NEGATED_QUESTIONS)
+def test_negated_not_intercepted(q):
+    assert check_emergency(q) is None, f"否定语境不应拦截: {q}"
 
 
 def test_testset_emergency_all_intercepted():

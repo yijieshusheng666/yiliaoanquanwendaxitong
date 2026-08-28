@@ -18,7 +18,7 @@ def main():
     setup_logging()
     n_pdf = count_documents()
     if n_pdf == 0:
-        print("[WARN] 未发现说明书 PDF，先执行: python -m app.data.generate_data")
+        print("[WARN] 未发现说明书文本，先执行: python -m app.data.generate_data")
         return
     n_chunks = build_index()
     print(f"[OK] 已索引 {n_pdf} 份说明书，共 {n_chunks} 个语义分块")

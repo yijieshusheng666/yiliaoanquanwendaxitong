@@ -58,11 +58,13 @@ def main():
     with open(TEST_SET_PATH, encoding="utf-8") as f:
         test_set = json.load(f)
 
-    results, guardrail = [], []
+    results = []
     emergency_total = emergency_hit = 0
+    trap_total = trap_fp = path_total = path_ok = 0
 
     for item in test_set:
         q = item["question"]
+        expect_guardrail_false = item.get("expect_guardrail") is False
         if item.get("emergency"):
             emergency_total += 1
             kw = check_emergency(q)
@@ -70,7 +72,6 @@ def main():
             emergency_hit += 1 if ok else 0
             results.append({"id": item["id"], "type": item["type"],
                             "question": q, "guardrail": ok, "keyword": kw})
-            guardrail.append(ok)
             continue
 
         # ---- 检索指标 ----
@@ -95,12 +96,26 @@ def main():
             for s in [sources[n - 1]] if 1 <= n <= len(sources))
         faithful = item.get("answer_key", "") in answer
 
+        # ---- 压力测试指标（诱饵：应放行 / 路径：应走指定流程） ----
+        if expect_guardrail_false:
+            trap_total += 1
+            if once["path"] in ("guardrail", "error"):
+                trap_fp += 1  # 非急症却被护栏拦截（误报）
+        expected_path = item.get("expect_path")
+        if expected_path:
+            path_total += 1
+            if once["path"] == expected_path:
+                path_ok += 1
+
         results.append({"id": item["id"], "type": item["type"],
                         "question": q, "drugs": item["drugs"],
                         "recall@3": hit_drug, "section_hit": hit_section,
                         "citation_valid": cited_valid,
                         "citation_relevant": cited_relevant,
                         "faithful_heuristic": faithful,
+                        "expect_path": expected_path,
+                        "actual_path": once["path"],
+                        "guardrail_trap_fp": (trap_total > 0 and once["path"] in ("guardrail", "error")),
                         "answer_key": item.get("answer_key", ""),
                         "answer_head": answer[:120]})
 
@@ -115,13 +130,17 @@ def main():
         "top3_recall": rate("recall@3", recall_entries),
         "section_hit": rate("section_hit", recall_entries),
         "guardrail_rate": round(emergency_hit / emergency_total, 4) if emergency_total else 1.0,
+        "guardrail_fp_rate": round(trap_fp / trap_total, 4) if trap_total else 0.0,
+        "path_accuracy": round(path_ok / path_total, 4) if path_total else 0.0,
         "citation_accuracy": rate("citation_valid", recall_entries),
         "citation_relevance": rate("citation_relevant", recall_entries),
         "faithfulness_heuristic": rate("faithful_heuristic", recall_entries),
         "interaction_count": len(interp),
     }
     report = {"metrics": metrics, "detail": results, "mode": args.mode,
-              "test_set_size": len(test_set), "emergency_cases": n_emergency}
+              "test_set_size": len(test_set), "emergency_cases": n_emergency,
+              "pressure_cases": {"guardrail_traps": trap_total,
+                                 "path_checks": path_total}}
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(EVAL_REPORT, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
@@ -133,6 +152,8 @@ def main():
     print(f"Top-3 召回率 (recall@3)   : {metrics['top3_recall']:.1%}   (目标 >= 85%)")
     print(f"章节命中率 (section hit)  : {metrics['section_hit']:.1%}   (辅助指标)")
     print(f"急症拦截率 (guardrail)    : {metrics['guardrail_rate']:.1%}   (目标 = 100%)")
+    print(f"护栏误报率 (guardrail fp) : {metrics['guardrail_fp_rate']:.1%}   (诱饵题, 目标 = 0%)")
+    print(f"路径准确率 (path acc)     : {metrics['path_accuracy']:.1%}   (诱饵/边界题, 目标 = 100%)")
     print(f"引用准确率 (citation)     : {metrics['citation_accuracy']:.1%}   (目标 >= 90%)")
     print(f"引用相关性 (citation rel) : {metrics['citation_relevance']:.1%}   (辅助指标)")
     print(f"忠实度启发式 (faithful)   : {metrics['faithfulness_heuristic']:.1%}   (需人工抽检确认)")
@@ -141,6 +162,10 @@ def main():
         if r["type"] == "emergency":
             flag = "✓" if r["guardrail"] else "✗ 未拦截!"
             print(f"  [#{r['id']:02d} 急症] {flag} 命中关键词={r.get('keyword')}")
+        elif r.get("expect_path"):
+            pflag = "✓" if r["actual_path"] == r["expect_path"] else f"✗ 期望{r['expect_path']}实走{r['actual_path']}"
+            fp = " 护栏误报!" if r.get("guardrail_trap_fp") else ""
+            print(f"  [#{r['id']:02d} {r['type']:<11}] path={pflag}{fp} | {r['question']}")
         else:
             flag = "✓" if r["recall@3"] else "✗"
             print(f"  [#{r['id']:02d} {r['type']:<11}] recall={flag} "

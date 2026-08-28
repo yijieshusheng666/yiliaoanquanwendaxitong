@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -103,10 +104,6 @@ def build_index() -> int:
     return len(docs)
 
 
-# 来源均衡：候选按来源分组后轮转交错抽取，所有来源（药品说明书/疾病章节/
-# 本草纲目等）一视同仁、无任何优先级，保证尽量多的不同药物/来源进入结果
-
-
 def _diversify(docs: List[Document], k: int) -> List[Document]:
     """来源轮转均衡：候选按来源分组（组内保持相似度序），各来源轮流取 1 条，
     直到凑满 k 条；候选不足时自然按原序输出。"""
@@ -140,9 +137,29 @@ SYMPTOM_SYNONYMS = {
     "心口疼": "胸痛",
 }
 
+# 问题意图 -> 目标章节：口语问题映射到说明书【章节】结构，拼入查询提升语义贴近度，
+# 让「孕妇能不能吃 X」「X 怎么吃」类问题优先命中对应章节分块（检索增强，不影响来源均衡）
+SECTION_PROBES = [
+    (r"孕妇|哺乳|儿童|小孩|婴幼儿|老人|老年人|肝肾功能|肝功能|肾功能", "特殊人群用药"),
+    (r"怎么吃|怎么喝|怎么用|怎么使用|剂量|用量|饭前|饭后|一次|一天", "用法用量"),
+    (r"禁忌|不能吃|禁用|慎用|过敏", "禁忌"),
+    (r"注意|高血压|糖尿病|心脏病", "注意事项"),
+    (r"成分|含什么|组成", "成分"),
+    (r"不良反应|副作用|副反应", "不良反应"),
+    (r"适应症|治什么|有什么用|什么病", "适应症"),
+    (r"相互作用|一起吃|同服|同时服用|合用", "药物相互作用"),
+    (r"贮藏|保存|冷藏|存放", "贮藏"),
+]
+
 
 def _expand_query(query: str) -> str:
     extra = [v for k, v in SYMPTOM_SYNONYMS.items() if k in query]
+    # 章节探针：命中一种意图即追加目标章节词（最多 2 个，避免噪声）
+    for pat, section in SECTION_PROBES:
+        if re.search(pat, query) and section not in extra:
+            extra.append(section)
+            if len(extra) >= 2:
+                break
     return " ".join([query] + extra)
 
 
