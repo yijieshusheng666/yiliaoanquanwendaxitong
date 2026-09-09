@@ -15,11 +15,18 @@ TEXT_DIR = DATA_DIR / "texts"
 INTERACTIONS_CSV = DATA_DIR / "interactions.csv"
 TEST_SET_PATH = DATA_DIR / "test_set.json"
 # 向量库必须落在纯 ASCII 路径：chroma-hnswlib(C++) 写 HNSW .bin 时无法处理中文路径
-CHROMA_DIR = Path("D:/chroma_db")
+# 可用环境变量 CHROMA_DIR 覆盖（Docker 部署时指向容器内挂载路径）
+CHROMA_DIR = Path(os.getenv("CHROMA_DIR", "D:/chroma_db"))
 OUTPUT_DIR = BASE_DIR / "outputs"
 LOG_FILE = OUTPUT_DIR / "run.log"
 FEEDBACK_FILE = OUTPUT_DIR / "feedback.jsonl"
 EVAL_REPORT = OUTPUT_DIR / "eval_report.json"
+
+# ---------- 服务端口（统一来源，可用环境变量覆盖） ----------
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))
+UI_PORT = int(os.getenv("UI_PORT", "7860"))
+API_BASE_URL = os.getenv("API_BASE_URL", f"http://127.0.0.1:{API_PORT}")
 
 # ---------- 检索 ----------
 # 嵌入模型：优先使用本地 models/bge-small-zh-v1.5（离线可用），否则走远程 BAAI/bge-small-zh-v1.5

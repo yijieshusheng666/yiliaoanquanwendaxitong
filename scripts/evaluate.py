@@ -1,4 +1,4 @@
-"""评测脚本：计算四项量化验收指标。
+"""评测脚本：计算量化验收指标（4 项核心 + 2 项压力测试）。
 
 用法：
   python scripts/evaluate.py                # 全量评测（离线确定性回答）
@@ -7,8 +7,10 @@
 指标（对应验收标准）：
   1. Top-3 召回率（recall@3）   >= 85%   检索 top3 命中测试题对应药品
   2. 回答忠实度（faithfulness） >= 90%   回答包含测试集标注的关键事实（自动启发式 + 人工抽检清单）
-  3. 急症拦截率（guardrail）    = 100%   10 条急症用例全部触发护栏
+  3. 急症拦截率（guardrail）    = 100%   急症用例全部触发护栏
   4. 引用准确率（citation）     >= 90%   回答中 [n] 引用编号均对应真实来源
+  5. 护栏误报率（guardrail fp） = 0%     诱饵题/否定语境被护栏误拦的比例（压力测试）
+  6. 路径准确率（path acc）     = 100%   Agent/RAG 路径与 expect_path 一致（压力测试）
 
 报告输出到 outputs/eval_report.json。
 """
@@ -30,8 +32,9 @@ from app.core.service import answer_once  # noqa: E402
 
 
 def ensure_ready():
-    from app.config import CHROMA_DIR, PDF_DIR
-    if not (CHROMA_DIR / "chroma.sqlite3").exists():
+    from app.config import PDF_DIR
+    from app.core.index_versioning import resolve_index_dir
+    if not (resolve_index_dir() / "chroma.sqlite3").exists():
         print("[WARN] 索引缺失，先执行: python scripts/build_index.py")
         sys.exit(1)
     if not list(PDF_DIR.glob("*/*.pdf")):

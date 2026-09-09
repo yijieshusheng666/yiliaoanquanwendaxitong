@@ -23,8 +23,8 @@ def ensure_data():
 
 
 def ensure_index():
-    from app.config import CHROMA_DIR
-    if not (CHROMA_DIR / "chroma.sqlite3").exists():
+    from app.core.index_versioning import resolve_index_dir
+    if not (resolve_index_dir() / "chroma.sqlite3").exists():
         print("[2/3] 构建向量索引（首次运行需下载 bge 模型，请耐心等待）...")
         from app.core.retrieval import build_index
         n = build_index()
@@ -34,15 +34,17 @@ def ensure_index():
 
 
 def start_gradio():
+    from app.config import UI_PORT
     from app.ui.gradio_app import build_ui
-    print("[3/3] Gradio UI 启动中: http://127.0.0.1:7860")
-    build_ui().queue().launch(server_name="0.0.0.0", server_port=7860)
+    print(f"[3/3] Gradio UI 启动中: http://127.0.0.1:{UI_PORT}")
+    build_ui().queue().launch(server_name="0.0.0.0", server_port=UI_PORT)
 
 
 def start_api():
     import uvicorn
-    print("[3/3] FastAPI 启动中: http://127.0.0.1:8000/docs")
-    uvicorn.run("app.api.server:app", host="0.0.0.0", port=8000, log_level="info")
+    from app.config import API_PORT
+    print(f"[3/3] FastAPI 启动中: http://127.0.0.1:{API_PORT}/docs")
+    uvicorn.run("app.api.server:app", host="0.0.0.0", port=API_PORT, log_level="info")
 
 
 def main():

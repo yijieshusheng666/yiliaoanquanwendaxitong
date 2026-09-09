@@ -1,6 +1,7 @@
-"""检索层：bge-small-zh-v1.5 嵌入（CPU）+ Chroma 本地持久化。
+"""检索层：bge-small-zh-v1.5 嵌入（CPU）+ Chroma 本地持久化（版本化）。
 
-- build_index(): 解析全部 PDF -> 分块 -> 嵌入 -> 写入 chroma_db/。
+- build_index(): 解析全部 PDF -> 分块 -> 嵌入 -> 写入 {INDEX_ROOT}/chroma_v{n}，
+  版本切换写 data/L3_index/build_manifest.json（原子指针，失败自动回滚）。
 - KnowledgeBase.search(): 相似度检索，返回带元数据（drug/section）的分块。
 """
 from __future__ import annotations
@@ -74,33 +75,68 @@ def _to_documents(chunks) -> List[Document]:
     return docs
 
 
-def build_index() -> int:
-    """构建/重建向量索引并持久化。返回分块总数。"""
+def build_index(force: bool = False) -> int:
+    """版本化构建向量索引并持久化。返回分块总数。
+
+    - 物理索引落在 ASCII 路径 ``{INDEX_ROOT}/chroma_v{n}``（hnswlib 无法写中文路径）；
+    - 构建前比较语料指纹：数据未变化且未强制时直接复用当前版本；
+    - 构建写入临时目录，校验通过后 rename 落位并原子切换 MANIFEST 指针；
+    - 失败只清理临时目录，MANIFEST 与已生效版本不受影响（失败自动回滚）。
+    """
+    from app.core.index_versioning import (INDEX_ROOT, corpus_fingerprint,
+                                           current_version, list_versions,
+                                           next_version_number,
+                                           register_version,
+                                           remove_failed_temp)
+
+    fp = corpus_fingerprint()
+    cur = current_version()
+    cur_dir = Path(cur.get("path", "")) if cur else None
+    if (cur and cur_dir and cur_dir.exists()
+            and cur.get("corpus_fingerprint") == fp and not force):
+        logger.info("语料指纹未变化（%s），复用现有版本 %s，跳过重建。"
+                    "如需强制重建请传 force=True", fp[:12], cur["name"])
+        return int(cur.get("stats", {}).get("chunk_count", 0))
+
     chunks = list(iter_all_chunks(TEXT_DIR))
     docs = _to_documents(chunks)
-    # 全量重建：先清空旧索引，避免残留不完整/重复 hnsw 文件
-    if CHROMA_DIR.exists():
-        shutil.rmtree(CHROMA_DIR, ignore_errors=True)
-        if CHROMA_DIR.exists():
-            raise RuntimeError(
-                f"旧索引目录无法删除（{CHROMA_DIR} 可能被运行中的服务占用）。"
-                "请先停止 API/Gradio 服务（python run.py 的进程）后重试。")
-    logger.info("开始构建索引：%d 个分块 -> %s", len(docs), CHROMA_DIR)
-    db = Chroma.from_documents(
-        documents=docs,
-        embedding=get_embeddings(),
-        persist_directory=str(CHROMA_DIR),
-        collection_name=COLLECTION_NAME,
-    )
-    # 强制 HNSW 索引落盘（Windows 下 mmap 延迟写，进程退出早可能导致 .bin 缺失）
-    db.similarity_search("完整性验证", k=1)
-    # 显式释放 db 并强制 GC，确保 mmap 文件句柄关闭、数据落盘
-    del db
-    gc.collect()
-    time.sleep(5)
-    if not list(CHROMA_DIR.glob("*/header.bin")):
-        raise RuntimeError("HNSW 索引文件未成功写入，请重试构建。")
-    logger.info("索引构建完成：%d 个分块已持久化", len(docs))
+    INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+    ver = next_version_number()
+    final_dir = INDEX_ROOT / f"chroma_v{ver}"
+    if final_dir.exists():
+        # 清理同名残留（版本号由 MANIFEST 递增，理论不会撞名；兜底清理）
+        shutil.rmtree(final_dir, ignore_errors=True)
+
+    logger.info("开始构建索引 v%d：%d 个分块 -> %s", ver, len(docs), final_dir)
+    t0 = time.time()
+    try:
+        db = Chroma.from_documents(
+            documents=docs,
+            embedding=get_embeddings(),
+            persist_directory=str(final_dir),
+            collection_name=COLLECTION_NAME,
+        )
+        # 强制 HNSW 索引落盘（Windows 下 mmap 延迟写，进程退出早可能导致 .bin 缺失）
+        db.similarity_search("完整性验证", k=1)
+        del db
+        gc.collect()
+        time.sleep(5)
+        if not list(final_dir.glob("*/header.bin")):
+            raise RuntimeError("HNSW 索引文件未成功写入，请重试构建。")
+        built_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        # 注册并原子切换 current 指针；此前查询链路始终指向旧版本/CHROMA_DIR
+        register_version(f"chroma_v{ver}", str(final_dir), fp,
+                         {"chunk_count": len(docs),
+                          "drug_count": len({c["drug"] for c in chunks}),
+                          "source_count": len({c["drug"] for c in chunks})},
+                         built_at)
+    except Exception:
+        logger.exception("索引构建失败，清理临时目录并保留旧版本")
+        remove_failed_temp(f"chroma_v{ver}")
+        raise
+    cost = time.time() - t0
+    logger.info("索引构建完成（%.1fs）：%d 个分块已持久化 -> %s",
+                cost, len(docs), final_dir)
     return len(docs)
 
 
@@ -165,8 +201,10 @@ def _expand_query(query: str) -> str:
 
 class KnowledgeBase:
     def __init__(self):
+        from app.core.index_versioning import resolve_index_dir
+        self._index_dir = resolve_index_dir()
         self.db = Chroma(
-            persist_directory=str(CHROMA_DIR),
+            persist_directory=str(self._index_dir),
             collection_name=COLLECTION_NAME,
             embedding_function=get_embeddings(),
         )

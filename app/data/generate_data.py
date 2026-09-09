@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
-import re
 from pathlib import Path
 
 from reportlab.lib import colors
