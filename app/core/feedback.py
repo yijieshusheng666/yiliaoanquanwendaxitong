@@ -9,12 +9,14 @@ from app.config import FEEDBACK_FILE
 
 
 def record_feedback(question: str, answer: str, rating: int,
-                    session_id: str = "", source: str = "") -> dict:
+                    session_id: str = "", source: str = "",
+                    user_id: str = "") -> dict:
     """rating: +1 点赞 / -1 点踩。写入 outputs/feedback.jsonl。"""
     FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
     item = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "session_id": session_id,
+        "user_id": user_id,
         "question": question,
         "answer": answer[:500],
         "rating": rating,

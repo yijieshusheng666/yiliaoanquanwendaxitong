@@ -75,3 +75,38 @@ def test_sessions_isolated(db_factory):
     assert ch.get_messages(a) == [{"role": "user", "content": "A 的问题"}]
     assert ch.get_messages(b) == [{"role": "user", "content": "B 的问题"}]
     assert ch.get_messages("not-exist-1") == []
+
+
+def test_p2_migration_adds_user_id_to_existing_db(db_factory):
+    """P2 迁移回归：已存在 conversations/messages（无 user_id 列）的旧库，
+    首次 _connect 后必须自动补 user_id 列，旧数据保留且归入游客空间。"""
+    import sqlite3
+    # 手工构造带旧表、无 user_id 列的库
+    conn = sqlite3.connect(str(ch._DB_PATH))
+    conn.execute(
+        "CREATE TABLE conversations ("
+        "id TEXT PRIMARY KEY, title TEXT NOT NULL, "
+        "created_at REAL NOT NULL, updated_at REAL NOT NULL)")
+    conn.execute(
+        "CREATE TABLE messages ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, "
+        "role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL)")
+    conn.execute(
+        "INSERT INTO conversations VALUES ('s_old1', '旧会话', 1.0, 1.0)")
+    conn.execute(
+        "INSERT INTO messages(conversation_id, role, content, created_at) "
+        "VALUES ('s_old1', 'user', '旧问题', 1.0)")
+    conn.commit()
+    conn.close()
+
+    conn = ch._connect()
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(conversations)")]
+    finally:
+        conn.close()
+    assert "user_id" in cols
+    # 旧会话保留并落游客空间
+    convs = ch.list_conversations()
+    assert convs[0]["id"] == "s_old1"
+    assert convs[0]["msg_count"] == 1
+    assert ch.get_messages("s_old1") == [{"role": "user", "content": "旧问题"}]

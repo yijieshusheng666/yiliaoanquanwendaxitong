@@ -30,7 +30,8 @@ def _connect() -> sqlite3.Connection:
         "id TEXT PRIMARY KEY,"
         "title TEXT NOT NULL,"
         "created_at REAL NOT NULL,"
-        "updated_at REAL NOT NULL)"
+        "updated_at REAL NOT NULL,"
+        "user_id TEXT)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages ("
@@ -50,6 +51,14 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_user_column(conn: sqlite3.Connection) -> None:
+    """P2 用户体系：确保 conversations 表带 user_id 列（幂等）。
+    旧行迁移后 user_id=NULL，自动归入游客空间，不丢数据。"""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()]
+    if "user_id" not in cols:
+        conn.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """旧版只有 chat_history 表时，迁移为 conversations + messages。"""
     has_old = conn.execute(
@@ -59,6 +68,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
     ).fetchone()
     if has_new or not has_old:
+        # 新结构无需迁移，但仍需保证用户体系列存在
+        _ensure_user_column(conn)
         return
     conn.execute("ALTER TABLE chat_history RENAME TO messages")
     old_cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
@@ -73,6 +84,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "VALUES (?,?,?,?)",
             (cid, DEFAULT_TITLE, time.time(), time.time()),
         )
+    _ensure_user_column(conn)
 
 
 def _title_from(question: str) -> str:
@@ -80,17 +92,17 @@ def _title_from(question: str) -> str:
     return q if len(q) <= _TITLE_MAX else q[:_TITLE_MAX] + "…"
 
 
-def create_conversation() -> str:
-    """新建会话，返回会话 ID。"""
+def create_conversation(user_id: Optional[str] = None) -> str:
+    """新建会话，返回会话 ID。user_id=None 表示游客空间。"""
     cid = "s_" + uuid.uuid4().hex[:12]
     now = time.time()
     with _LOCK:
         conn = _connect()
         try:
             conn.execute(
-                "INSERT INTO conversations(id, title, created_at, updated_at) "
-                "VALUES (?,?,?,?)",
-                (cid, DEFAULT_TITLE, now, now),
+                "INSERT INTO conversations(id, title, created_at, updated_at, user_id) "
+                "VALUES (?,?,?,?,?)",
+                (cid, DEFAULT_TITLE, now, now, user_id),
             )
             conn.commit()
         finally:
@@ -98,8 +110,9 @@ def create_conversation() -> str:
     return cid
 
 
-def list_conversations() -> List[dict]:
-    """会话列表（按最近更新倒序），含标题、时间、消息数。"""
+def list_conversations(user_id: Optional[str] = None) -> List[dict]:
+    """会话列表（按最近更新倒序），仅返回归属 user 的会话。
+    游客空间（user_id=None）用于兼容未登录的既有演示数据。"""
     with _LOCK:
         conn = _connect()
         try:
@@ -107,7 +120,9 @@ def list_conversations() -> List[dict]:
                 "SELECT c.id, c.title, c.created_at, c.updated_at, "
                 "       (SELECT COUNT(*) FROM messages m "
                 "         WHERE m.conversation_id = c.id) AS msg_count "
-                "FROM conversations c ORDER BY c.updated_at DESC"
+                "FROM conversations c WHERE c.user_id IS ? "
+                "ORDER BY c.updated_at DESC",
+                (user_id,),
             ).fetchall()
         finally:
             conn.close()
@@ -116,6 +131,22 @@ def list_conversations() -> List[dict]:
          "updated_at": r[3], "msg_count": r[4]}
         for r in rows
     ]
+
+
+def get_conversation_owner(conversation_id: str) -> Optional[str]:
+    """返回会话归属的 user_id；会话不存在返回 None。
+    用于鉴权：只有 owner 匹配才能读取/追加/删除。"""
+    if not conversation_id:
+        return None
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT user_id FROM conversations WHERE id=?", (conversation_id,)
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
 
 
 def get_messages(conversation_id: str,
@@ -179,17 +210,22 @@ def append(conversation_id: str, role: str, content: str) -> None:
             conn.close()
 
 
-def delete_conversation(conversation_id: str) -> None:
-    """删除会话及其全部消息。"""
+def delete_conversation(conversation_id: str,
+                        user_id: Optional[str] = None) -> bool:
+    """删除会话及其全部消息；仅当归属匹配时删除，返回是否删除成功。"""
     if not conversation_id:
-        return
+        return False
     with _LOCK:
         conn = _connect()
         try:
-            conn.execute(
-                "DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
-            conn.execute(
-                "DELETE FROM conversations WHERE id=?", (conversation_id,))
+            cur = conn.execute(
+                "DELETE FROM conversations WHERE id=? AND user_id IS ?",
+                (conversation_id, user_id),
+            )
+            if cur.rowcount:
+                conn.execute(
+                    "DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
             conn.commit()
+            return cur.rowcount > 0
         finally:
             conn.close()
