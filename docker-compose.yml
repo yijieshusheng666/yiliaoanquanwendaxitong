@@ -7,12 +7,15 @@ services:
       - "7860:7860"   # Gradio 演示 UI
     environment:
       HF_HOME: /app/.cache
-      API_BASE: http://127.0.0.1:8000
+      API_BASE_URL: http://127.0.0.1:8000
+      INDEX_ROOT: /app/index        # 版本化向量索引根（与 CHROMA_DIR 一致）
+      CHROMA_DIR: /app/index        # 旧链路回退路径（复用同一挂载）
     env_file:
       - path: .env        # 配置 LLM_API_KEY 后自动切换在线模式
         required: false
     volumes:
-      - ./chroma_db:/app/chroma_db   # 向量索引持久化
-      - ./outputs:/app/outputs       # 日志/反馈持久化
-      - ./data:/app/data             # 知识库数据持久化
+      - ./index:/app/index          # 向量索引持久化（版本化）
+      - ./outputs:/app/outputs      # 日志/反馈/SQLite 持久化
+      - ./data:/app/data            # 知识库数据持久化
+      - ./models:/app/models        # 本地嵌入模型持久化（避免每次重建下载）
     restart: unless-stopped

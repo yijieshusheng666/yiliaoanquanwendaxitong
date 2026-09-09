@@ -1,5 +1,6 @@
 # 运行时产物
 chroma_db/
+index/
 outputs/
 data/pdfs/
 data/texts/*
@@ -8,6 +9,17 @@ data/import/
 data/drugbank/
 models/
 *.log
+
+# 数据治理产物（由 scripts/init_data_v2.py / build_drug_registry.py / build_index.py 生成）
+data/L0_sources/
+data/L1_registry/
+data/L2_corpus/
+data/L3_index/
+data/L4_eval/
+data/MANIFEST.json
+
+# WorkBuddy 本地工作数据
+.workbuddy/
 
 # 环境变量（含密钥）
 .env
