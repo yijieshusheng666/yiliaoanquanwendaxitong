@@ -12,12 +12,44 @@ _SUFFIXES = ["缓释胶囊", "缓释片", "肠溶胶囊", "肠溶片", "咀嚼�
              "滴剂", "气雾剂", "糖浆", "软胶囊", "栓", "滴眼液", "贴片"]
 
 
+# 类别泛称 -> 该类别下的具体药名（仅收录知识库/相互作用表中确实存在的代表药）。
+# 让「头孢类抗生素能同服吗」这类泛称提问也能落到具体药对查询上。
+# 键必须是完整的类别词组（含「类」），避免药名本身（如「头孢呋辛酯片」）误触发。
+CLASS_ALIASES: Dict[str, List[str]] = {
+    "头孢类": ["头孢呋辛酯片", "头孢克肟分散片"],
+    "头孢菌素类": ["头孢呋辛酯片", "头孢克肟分散片"],
+    "喹诺酮类": ["左氧氟沙星片", "莫西沙星片", "环丙沙星片"],
+    "氟喹诺酮类": ["左氧氟沙星片", "莫西沙星片", "环丙沙星片"],
+    "他汀类": ["阿托伐他汀钙片", "辛伐他汀片", "洛伐他汀胶囊", "普伐他汀钠片"],
+    "大环内酯类": ["红霉素肠溶片", "克拉霉素片", "阿奇霉素分散片"],
+    "磺脲类": ["格列本脲片", "格列吡嗪片"],
+    "安眠药": ["艾司唑仑片", "地西泮片"],
+    "抗抑郁药": ["氟西汀胶囊", "帕罗西汀片", "舍曲林片"],
+}
+
+
 def short_name(name: str) -> str:
     """去掉剂型后缀得到短名，如 布洛芬缓释胶囊 -> 布洛芬。"""
     for s in _SUFFIXES:
         if name.endswith(s) and len(name) > len(s):
             return name[: -len(s)]
     return name
+
+
+def distinct_drugs(names: List[str]) -> List[str]:
+    """按短名去重，保留每个成分首次出现的名字（顺序不变）。
+
+    同一成分的多个剂型（布洛芬缓释胶囊 / 布洛芬片）互为同一味药，
+    若不去重会让「药对」退化成单药自配对，导致相互作用查询恒不命中。
+    """
+    seen, out = set(), []
+    for n in names:
+        key = short_name(n)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out
 
 
 class InteractionDB:
@@ -45,7 +77,12 @@ class InteractionDB:
         return self._names
 
     def find_drugs(self, text: str) -> List[str]:
-        """返回文本中命中的规范药品名（长名优先）。"""
+        """返回文本中命中的规范药品名（长名优先）。
+
+        识别三类写法：① 完整药名（布洛芬缓释胶囊）；② 短名（布洛芬，补全为全部剂型）；
+        ③ 类别泛称（头孢类抗生素 -> 该类别下的具体药）。泛称结果追加在末尾，
+        不参与排序，避免压过用户明确点名的药。
+        """
         hit_names = set()
         for name in self._names:
             if name in text:
@@ -54,7 +91,17 @@ class InteractionDB:
         for sname, names in self._short_index.items():
             if sname in text and sname not in hit_names:
                 hit_names.update(names)
-        return sorted(hit_names, key=lambda n: -len(n))
+        ordered = sorted(hit_names, key=lambda n: -len(n))
+
+        alias_hits: List[str] = []
+        known = set(self._names)
+        for phrase, members in CLASS_ALIASES.items():
+            if phrase not in text:
+                continue
+            for m in members:
+                if m in known and m not in alias_hits and m not in hit_names:
+                    alias_hits.append(m)
+        return ordered + sorted(alias_hits, key=lambda n: -len(n))
 
     def lookup(self, a: str, b: str) -> List[Dict]:
         """查找 a、b 两药（任意顺序）的全部相互作用记录。O(1) 短名对索引。"""

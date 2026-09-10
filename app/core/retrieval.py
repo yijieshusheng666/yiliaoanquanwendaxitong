@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import List, Optional
 
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -79,9 +80,10 @@ def build_index(force: bool = False) -> int:
     """版本化构建向量索引并持久化。返回分块总数。
 
     - 物理索引落在 ASCII 路径 ``{INDEX_ROOT}/chroma_v{n}``（hnswlib 无法写中文路径）；
-    - 构建前比较语料指纹：数据未变化且未强制时直接复用当前版本；
-    - 构建写入临时目录，校验通过后 rename 落位并原子切换 MANIFEST 指针；
-    - 失败只清理临时目录，MANIFEST 与已生效版本不受影响（失败自动回滚）。
+    - 构建前比较索引指纹（语料 + 嵌入模型/分块配置）：未变化且未强制时直接复用当前版本；
+    - 语料为空时直接报错，不注册空索引（否则指纹会与空语料永久一致）；
+    - 构建写入 ``chroma_v{n}`` 新目录，校验 HNSW 文件落盘后原子切换 MANIFEST 指针；
+    - 失败只清理新建目录，MANIFEST 与已生效版本不受影响（失败自动回滚）。
     """
     from app.core.index_versioning import (INDEX_ROOT, corpus_fingerprint,
                                            current_version, list_versions,
@@ -99,6 +101,12 @@ def build_index(force: bool = False) -> int:
         return int(cur.get("stats", {}).get("chunk_count", 0))
 
     chunks = list(iter_all_chunks(TEXT_DIR))
+    if not chunks:
+        # 空语料绝不能注册为生效版本：指纹一旦写入就与空语料一致，
+        # 之后每次构建都会判定"未变化"而永久复用空索引，服务只会答"未找到"。
+        raise RuntimeError(
+            f"语料为空，拒绝构建索引：{TEXT_DIR} 下没有可索引的 txt。"
+            "请先运行 python -m app.data.generate_data 生成说明书数据。")
     docs = _to_documents(chunks)
     INDEX_ROOT.mkdir(parents=True, exist_ok=True)
     ver = next_version_number()

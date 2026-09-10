@@ -33,6 +33,10 @@ def _connect() -> sqlite3.Connection:
         "updated_at REAL NOT NULL,"
         "user_id TEXT)"
     )
+    # 先迁移旧表（早期单会话版 chat_history -> messages），再建 messages：
+    # 顺序反了会让 _migrate 看到的 messages 恒为"已存在"，迁移分支永不执行，
+    # 旧库数据静默不可见。
+    _migrate(conn)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -45,8 +49,6 @@ def _connect() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_messages_conv "
         "ON messages(conversation_id, id)"
     )
-    # 兼容旧表（早期单会话版 chat_history），迁入新结构
-    _migrate(conn)
     conn.commit()
     return conn
 

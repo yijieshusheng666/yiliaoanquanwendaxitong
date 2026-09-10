@@ -38,6 +38,14 @@ NEGATED_QUESTIONS = [
     "病人并不是昏迷，是睡着了，需要叫醒吗？",
 ]
 
+# 同一关键词多次出现：只要有一次不处于否定语境就必须拦截（先否定后明确的绕过）
+MULTI_MENTION_QUESTIONS = [
+    "我没有胸痛，但现在胸痛得厉害，能吃硝酸甘油吗？",
+    "他说不是中毒，后来中毒了怎么办？",
+    "刚开始没有昏迷，现在昏迷不醒了！",
+    "不是心梗，医生说是心梗、要马上送医院",
+]
+
 
 @pytest.mark.parametrize("q", EMERGENCY_QUESTIONS)
 def test_emergency_intercepted(q):
@@ -52,6 +60,12 @@ def test_normal_not_intercepted(q):
 @pytest.mark.parametrize("q", NEGATED_QUESTIONS)
 def test_negated_not_intercepted(q):
     assert check_emergency(q) is None, f"否定语境不应拦截: {q}"
+
+
+@pytest.mark.parametrize("q", MULTI_MENTION_QUESTIONS)
+def test_multi_mention_intercepted(q):
+    """关键词出现多次时，只看首次出现会被「先否定后明确」绕过。"""
+    assert check_emergency(q) is not None, f"存在未否定的急症表述，必须拦截: {q}"
 
 
 def test_testset_emergency_all_intercepted():

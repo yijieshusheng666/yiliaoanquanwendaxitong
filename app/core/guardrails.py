@@ -26,17 +26,26 @@ _AMBIGUOUS_PREFIX = ("是", "可", "不")
 
 
 def check_emergency(text: str) -> str | None:
-    """若命中急症关键词返回命中的词，否则返回 None（保守否定语境豁免）。"""
+    """若命中急症关键词返回命中的词，否则返回 None（保守否定语境豁免）。
+
+    同一关键词可能出现多次（如"我没有胸痛，现在胸痛得厉害"）：只要存在**任一**
+    未处于否定语境的出现位置即拦截，避免「先否定后明确」绕过护栏。
+    """
     if not text:
         return None
     for kw in EMERGENCY_KEYWORDS:
-        idx = text.find(kw)
-        if idx == -1:
-            continue
-        if _negated_before(text, idx):
-            continue
-        return kw
+        for idx in _find_all(text, kw):
+            if not _negated_before(text, idx):
+                return kw
     return None
+
+
+def _find_all(text: str, kw: str):
+    """依次产出 kw 在 text 中的全部起始下标。"""
+    start = text.find(kw)
+    while start != -1:
+        yield start
+        start = text.find(kw, start + 1)
 
 
 def _negated_before(text: str, idx: int) -> bool:

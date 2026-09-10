@@ -24,7 +24,7 @@ from langchain.tools import StructuredTool
 from app.config import (DISCLAIMER, EMERGENCY_RESPONSE, HISTORY_TURNS,
                         ONLINE_MODE, TOP_K)
 from app.core.guardrails import check_emergency
-from app.core.interaction_db import get_interaction_db, risk_text
+from app.core.interaction_db import distinct_drugs, get_interaction_db, risk_text
 from app.core.logging_setup import get_logger
 from app.core.offline import offline_answer
 from app.core.retrieval import get_knowledge_base
@@ -80,23 +80,30 @@ Final Answer: 面向用户的最终回答。Final Answer 中须包含明确结�
 Question: {input}
 {agent_scratchpad}"""
 
-INTERACTION_RE = re.compile(r"(和|与|跟|同).{0,12}(一起|同时|同服|同用|同吃)?.{0,4}(吃|服用|用|用药|使用|服)")
+# 「A 和 B 能不能一起 X」类问法：动词覆盖 吃/喝/服用/联用/合用 等口语与书面表达
+INTERACTION_RE = re.compile(
+    r"(和|与|跟|同).{0,12}(一起|同时|同服|同用|同吃)?.{0,4}"
+    r"(吃|喝|服用|饮用|联用|合用|用药|使用|服|用)")
 
 
 # ---------------------------------------------------------------
 # 问题分类
 # ---------------------------------------------------------------
 def classify_interaction(question: str, history: Optional[List[dict]] = None):
-    """规则识别「A 和 B 能一起吃吗」类问题。返回 (is_interaction, drugs)。"""
+    """规则识别「A 和 B 能一起吃吗」类问题。返回 (is_interaction, drugs)。
+
+    drugs 按成分去重（同一种药的多个剂型只算一味），否则「布洛芬片 + 布洛芬缓释胶囊」
+    会被误判成两药相互作用；返回全部识别到的成分供后续两两匹配。
+    """
     text = question
     if history:
         last = [h for h in history if h.get("role") == "user"]
         if last:
             text = last[-1]["content"] + " " + question
     db = get_interaction_db()
-    drugs = db.find_drugs(text)
+    drugs = distinct_drugs(db.find_drugs(text))
     if len(drugs) >= 2 and INTERACTION_RE.search(text):
-        return True, drugs[:2]
+        return True, drugs
     return False, []
 
 
@@ -134,7 +141,11 @@ async def _rag_stream(question, history, kb, docs):
         if tok:
             answer += tok
             yield {"type": "token", "content": tok}
+    # 免责声明必须走 token 事件：前端渲染与 SSE 落盘都只消费 token，
+    # 只拼进 done.answer 会让在线模式的声明在界面与历史里双双丢失。
     answer += DISCLAIMER
+    async for ev in _yield_tokens(DISCLAIMER):
+        yield ev
     sources = _sources_from_docs(docs)
     yield {"type": "sources", "sources": sources}
     yield {"type": "done", "answer": answer, "sources": sources,
@@ -146,9 +157,11 @@ async def _rag_stream(question, history, kb, docs):
 # ---------------------------------------------------------------
 def _tool_lookup(query: str) -> str:
     db = get_interaction_db()
-    drugs = db.find_drugs(query)
+    # 必须对全部识别到的成分两两匹配：只取前 2 个时，同一味药的多个剂型
+    # （布洛芬缓释胶囊 / 布洛芬片）会退化成单药自配对，导致已知相互作用被漏检。
+    drugs = distinct_drugs(db.find_drugs(query))
     if len(drugs) >= 2:
-        hits = db.lookup_many(drugs[:2])
+        hits = db.lookup_many(drugs[:6])
         if hits:
             parts = []
             for i, r in enumerate(hits[:2], 1):
@@ -291,8 +304,8 @@ async def answer_stream(question: str,
     docs = kb.search(question, k=TOP_K)
     hits = []
     if is_interaction:
-        db = get_interaction_db()
-        hits = db.lookup_many(drugs) or db.lookup_many(db.find_drugs(question))
+        # drugs 已按成分去重且含类别泛称展开结果，直接两两匹配即可
+        hits = get_interaction_db().lookup_many(drugs[:6])
 
     yield {"type": "start", "path": "agent" if is_interaction else "rag",
            "mode": "online" if use_online else "offline",

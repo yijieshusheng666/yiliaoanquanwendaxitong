@@ -35,15 +35,20 @@ async def lifespan(_: FastAPI):
     """启动时确保数据与索引就绪（首次启动自动构建）。"""
     setup_logging()
     logger.info("医疗安全问答系统 API 启动中...")
-    from app.core.index_versioning import resolve_index_dir
-    if not (resolve_index_dir() / "chroma.sqlite3").exists():
+    from app.core.index_versioning import index_is_ready
+    if not index_is_ready():
         logger.info("检测到向量索引缺失，准备构建...")
         if not PDF_DIR.exists() or not list(PDF_DIR.glob("*/*.pdf")):
             logger.info("说明书 PDF 缺失，先生成数据...")
             from app.data.generate_data import main as gen_data
             gen_data()
         from app.core.retrieval import build_index
-        build_index()
+        try:
+            build_index()
+        except RuntimeError as exc:
+            # 空语料等硬错误：不带可用索引启动，检索链路只会一直答"未找到"
+            logger.error("索引构建失败，服务无法提供检索：%s", exc)
+            raise
         logger.info("向量索引构建完成")
     yield
 
@@ -104,16 +109,22 @@ def _valid_sid(sid: str) -> str:
 # SSE 工具
 # ---------------------------------------------------------------
 def _sse(question: str, history: List[dict], sid: str = ""):
-    full_text = []
-
     async def gen():
+        text = ""
         async for ev in answer_stream(question, history):
-            if ev.get("type") == "token":
-                full_text.append(ev["content"])
+            etype = ev.get("type")
+            if etype == "emergency":
+                # 护栏回复不是 token 流，必须单独取，否则急症回答不落盘
+                text = ev.get("content", "")
+            elif etype == "token":
+                text += ev.get("content", "")
+            elif etype == "done" and not text:
+                # 仅 token 全空时兜底（如流式途中报错）：避免用错误文案覆盖已有片段
+                text = ev.get("answer", "")
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
         # 流式结束后落盘助手回复
-        if sid:
-            append(sid, "assistant", "".join(full_text))
+        if sid and text:
+            append(sid, "assistant", text)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

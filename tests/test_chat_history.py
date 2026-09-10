@@ -77,6 +77,33 @@ def test_sessions_isolated(db_factory):
     assert ch.get_messages("not-exist-1") == []
 
 
+def test_legacy_single_session_table_is_migrated(db_factory):
+    """旧版单会话库（只有 chat_history 表）首次 _connect 必须迁移为 conversations+messages。
+
+    回归点：_connect 若先建 messages 表，_migrate 看到的 messages 恒为"已存在"，
+    迁移分支永不执行，旧库数据静默不可见。
+    """
+    import sqlite3
+    conn = sqlite3.connect(str(ch._DB_PATH))
+    conn.execute(
+        "CREATE TABLE chat_history ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, "
+        "content TEXT, created_at REAL)")
+    conn.execute("INSERT INTO chat_history(session_id, role, content, created_at) "
+                 "VALUES ('s_legacy1','user','旧版问题','1.0')")
+    conn.commit()
+    conn.close()
+
+    convs = ch.list_conversations()
+    assert [c["id"] for c in convs] == ["s_legacy1"], "旧会话未迁入 conversations"
+    assert convs[0]["msg_count"] == 1
+    assert ch.get_messages("s_legacy1") == [
+        {"role": "user", "content": "旧版问题"}]
+    # 迁移后新消息仍可正常追加（列名已改为 conversation_id）
+    ch.append("s_legacy1", "assistant", "新回答")
+    assert ch.get_messages("s_legacy1")[-1]["content"] == "新回答"
+
+
 def test_p2_migration_adds_user_id_to_existing_db(db_factory):
     """P2 迁移回归：已存在 conversations/messages（无 user_id 列）的旧库，
     首次 _connect 后必须自动补 user_id 列，旧数据保留且归入游客空间。"""

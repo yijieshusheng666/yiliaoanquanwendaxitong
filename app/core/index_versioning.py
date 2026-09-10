@@ -21,13 +21,12 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from app.config import DATA_DIR, CHROMA_DIR
+from app.config import CHROMA_DIR, DATA_DIR, INDEX_ROOT
 
 logger = logging.getLogger("med_safety.index_versioning")
 
 # 物理索引根（必须 ASCII：hnswlib C++ 无法处理中文路径）
-# 可用环境变量 INDEX_ROOT 覆盖（Docker 部署时指向容器内挂载路径）
-INDEX_ROOT = Path(os.getenv("INDEX_ROOT", "D:/medsafe_index"))
+# 默认值与 CHROMA_DIR 同源，统一在 app/config.py 定义（此处仅沿用，便于旧代码继续 import）
 # 版本治理 MANIFEST（继承 L3 骨架文件，字段向后兼容扩展）
 L3_DIR = DATA_DIR / "L3_index"
 MANIFEST_PATH = L3_DIR / "build_manifest.json"
@@ -37,12 +36,33 @@ _MANIFEST_VERSION = 2
 _FINGERPRINT_INPUTS = ("texts", "interactions.csv")
 
 
-def corpus_fingerprint() -> str:
-    """语料指纹：data/texts/*.txt + data/interactions.csv 逐文件 sha256 聚合。
+def fingerprint_config() -> Dict[str, object]:
+    """影响向量空间的构建配置（指纹必须覆盖，否则换模型/改分块不会重建）。
 
-    任何源文件内容变化 -> 指纹变化 -> 触发重建（同版本重建前置判断）。
+    嵌入模型用「标识名」而非绝对路径：本地路径随机器变化，纳进去会让同一份
+    语料在换机器后无谓重建；同名的本地模型内容变化不在覆盖范围内（如需严格
+    校验可另存模型文件哈希）。
     """
-    entries: List[str] = []
+    from app.config import CHUNK_MAX_CHARS, COLLECTION_NAME, EMBEDDING_MODEL
+
+    model = str(EMBEDDING_MODEL)
+    # 本地目录（.../models/bge-small-zh-v1.5）只取末级目录名，跨机器可比
+    model_id = Path(model).name if Path(model).is_dir() else model
+    return {
+        "embedding_model": model_id,
+        "chunk_max_chars": int(CHUNK_MAX_CHARS),
+        "collection": COLLECTION_NAME,
+    }
+
+
+def corpus_fingerprint() -> str:
+    """索引指纹：构建配置 + data/texts/*.txt + data/interactions.csv 逐文件 sha256 聚合。
+
+    任何源文件内容或向量空间配置（嵌入模型 / 分块上限 / 集合名）变化 ->
+    指纹变化 -> 触发重建（同版本重建前置判断）。
+    """
+    entries: List[str] = [json.dumps(fingerprint_config(), sort_keys=True,
+                                     ensure_ascii=False)]
     for rel in _FINGERPRINT_INPUTS:
         p = DATA_DIR / rel
         if p.is_dir():
@@ -104,15 +124,33 @@ def resolve_index_dir() -> Path:
     """解析当前生效的物理索引目录。
 
     - MANIFEST 有 current 且目录完整（chroma.sqlite3 存在）-> 返回该版本目录；
-    - 否则回退原 CHROMA_DIR（兼容未版本化的旧链路）。
+    - 否则回退 CHROMA_DIR（与 INDEX_ROOT 同源，兼容未版本化的旧链路），并打警告：
+      回退意味着正在使用「非当前版本」的索引，静默回退会让人误以为检索正常。
     """
     cur = current_version()
     if cur:
         d = Path(cur.get("path", ""))
         if d.exists() and (d / "chroma.sqlite3").exists():
             return d
-        logger.warning("索引版本 %s 目录不完整，回退 %s", cur.get("name"), CHROMA_DIR)
+        logger.warning("索引版本 %s 目录不完整（%s），回退 %s；"
+                       "建议执行 python scripts/build_index.py 重建",
+                       cur.get("name"), d, CHROMA_DIR)
+        return CHROMA_DIR
+
+    if (CHROMA_DIR / "chroma.sqlite3").exists():
+        logger.warning("未找到生效的索引版本（MANIFEST: %s），正在使用回退目录 %s 中的"
+                       "旧索引；如需与当前语料对齐请执行 python scripts/build_index.py",
+                       MANIFEST_PATH, CHROMA_DIR)
     return CHROMA_DIR
+
+
+def index_is_ready() -> bool:
+    """当前是否已有可用索引（生效版本目录，或回退目录中的旧索引）。
+
+    统一就绪判据，供 run.py / API lifespan / 评测脚本复用，避免各处各写一份
+    "chroma.sqlite3 是否存在" 的判断而出现口径漂移。
+    """
+    return (resolve_index_dir() / "chroma.sqlite3").exists()
 
 
 def next_version_number() -> int:

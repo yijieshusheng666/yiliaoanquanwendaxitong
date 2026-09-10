@@ -55,13 +55,15 @@ def verify_one(path: Path) -> Dict:
     raw = path.read_text(encoding="utf-8").strip()
     name = path.stem
     if not raw:
-        return _err(name, "文件为空")
+        return _err(name, "文件为空", raw)
     if len(raw) < MIN_TEXT_CHARS:
-        return _err(name, f"文本过短（{len(raw)} 字符 < {MIN_TEXT_CHARS}），疑为残缺文档")
+        return _err(name, f"文本过短（{len(raw)} 字符 < {MIN_TEXT_CHARS}），疑为残缺文档",
+                    raw)
 
     sections = split_sections(raw)
     if len(sections) == 1 and sections[0][0] == "说明书全文":
-        return _err(name, "无【章节】标记，整份文档将退化为单个分块（检索粒度过粗）")
+        return _err(name, "无【章节】标记，整份文档将退化为单个分块（检索粒度过粗）",
+                    raw)
 
     missing = _core_missing(sections)
     problems = []
@@ -99,8 +101,21 @@ def _find_duplicate(name: str) -> str | None:
     return None
 
 
-def _err(name: str, msg: str):
-    return {"name": name, "problems": [msg], "pass": False}
+def _err(name: str, msg: str, raw: str = ""):
+    """退化文档（空/过短/无章节）的统一返回结构。
+
+    字段必须与 verify_one 的正常返回保持一致（尤其是 missing_core），
+    否则汇总阶段取 r["missing_core"] 会 KeyError，恰好在最该报错的场景崩掉。
+    """
+    return {
+        "name": name,
+        "sections": [],
+        "section_count": 0,
+        "chars": len(raw),
+        "missing_core": [],
+        "problems": [msg],
+        "pass": False,
+    }
 
 
 def main():

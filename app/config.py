@@ -14,9 +14,14 @@ PDF_DIR = DATA_DIR / "pdfs"
 TEXT_DIR = DATA_DIR / "texts"
 INTERACTIONS_CSV = DATA_DIR / "interactions.csv"
 TEST_SET_PATH = DATA_DIR / "test_set.json"
-# 向量库必须落在纯 ASCII 路径：chroma-hnswlib(C++) 写 HNSW .bin 时无法处理中文路径
-# 可用环境变量 CHROMA_DIR 覆盖（Docker 部署时指向容器内挂载路径）
-CHROMA_DIR = Path(os.getenv("CHROMA_DIR", "D:/chroma_db"))
+# 向量库存放路径必须为纯 ASCII：chroma-hnswlib(C++) 写 HNSW .bin 时无法处理中文路径。
+# 单点定义索引根：版本化索引目录（{INDEX_ROOT}/chroma_v{n}）与旧链路回退目录必须同源，
+# 否则 MANIFEST 丢失时会静默回退到另一个目录（可能是很久以前的陈旧索引）。
+# 环境变量 INDEX_ROOT / CHROMA_DIR 任一设置即生效（Docker 部署指向容器内挂载路径）。
+_INDEX_ROOT_DEFAULT = "D:/medsafe_index"
+_index_root = os.getenv("INDEX_ROOT") or os.getenv("CHROMA_DIR") or _INDEX_ROOT_DEFAULT
+INDEX_ROOT = Path(_index_root)
+CHROMA_DIR = Path(os.getenv("CHROMA_DIR") or _index_root)
 OUTPUT_DIR = BASE_DIR / "outputs"
 LOG_FILE = OUTPUT_DIR / "run.log"
 FEEDBACK_FILE = OUTPUT_DIR / "feedback.jsonl"

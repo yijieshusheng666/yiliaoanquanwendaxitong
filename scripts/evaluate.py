@@ -33,8 +33,8 @@ from app.core.service import answer_once  # noqa: E402
 
 def ensure_ready():
     from app.config import PDF_DIR
-    from app.core.index_versioning import resolve_index_dir
-    if not (resolve_index_dir() / "chroma.sqlite3").exists():
+    from app.core.index_versioning import index_is_ready
+    if not index_is_ready():
         print("[WARN] 索引缺失，先执行: python scripts/build_index.py")
         sys.exit(1)
     if not list(PDF_DIR.glob("*/*.pdf")):

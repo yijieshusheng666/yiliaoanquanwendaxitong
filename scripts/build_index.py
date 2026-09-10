@@ -36,12 +36,12 @@ def main():
         if not versions:
             print("尚无版本化索引。当前生效目录（回退）: " + str(resolve_index_dir()))
             return
-        print(f"{'版本':<12}{'分块数':<8}{'指纹':<14}{'构建时间':<24}{'路径'}")
+        print(f"{'版本':<12}{'分块数':<8}{'指纹':<14}{'构建时间':<26}{'路径'}")
         for v in versions:
             st = v.get("stats", {})
             print(f"{v.get('name',''):<12}{st.get('chunk_count','-'):<8}"
                   f"{v.get('corpus_fingerprint','')[:12]:<14}"
-                  f"{v.get('built_at',''):<24}{v.get('path','')}")
+                  f"{v.get('built_at',''):<26}{v.get('path','')}")
         cur = resolve_index_dir()
         print(f"当前生效目录: {cur}")
         return

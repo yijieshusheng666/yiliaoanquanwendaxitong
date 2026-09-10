@@ -23,14 +23,19 @@ def ensure_data():
 
 
 def ensure_index():
-    from app.core.index_versioning import resolve_index_dir
-    if not (resolve_index_dir() / "chroma.sqlite3").exists():
-        print("[2/3] 构建向量索引（首次运行需下载 bge 模型，请耐心等待）...")
-        from app.core.retrieval import build_index
+    from app.core.index_versioning import index_is_ready
+    if index_is_ready():
+        print("[2/3] 向量索引已就绪，跳过构建")
+        return
+    print("[2/3] 构建向量索引（首次运行需下载 bge 模型，请耐心等待）...")
+    from app.core.retrieval import build_index
+    try:
         n = build_index()
-        print(f"[2/3] 索引构建完成：{n} 个分块")
-    else:
-        print("[2/3] 向量索引已存在，跳过构建")
+    except RuntimeError as exc:
+        # 语料为空等硬错误：宁可启动失败，也不要带着空索引跑（此后会一直答"未找到"）
+        print(f"[2/3] 索引构建失败：{exc}")
+        sys.exit(1)
+    print(f"[2/3] 索引构建完成：{n} 个分块")
 
 
 def start_gradio():
