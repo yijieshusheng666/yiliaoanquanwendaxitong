@@ -21,10 +21,17 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 
 from app.config import (BASE_DIR, CHROMA_DIR, COLLECTION_NAME,
-                        EMBEDDING_MODEL, LOCAL_EMBED_DIR, TEXT_DIR, TOP_K)
+                        EMBEDDING_MODEL, LOCAL_EMBED_DIR, RERANK_ENABLED,
+                        TEXT_DIR, TOP_K)
+from app.core.bm25_index import BM25Index, is_available
 from app.core.ingestion import iter_all_chunks
 
 logger = logging.getLogger("med_safety.retrieval")
+
+# 稀疏索引文件名（随向量索引版本目录持久化）
+BM25_FILE = "bm25.pkl"
+# RRF 融合常数：rank 按 1/(k+rank) 加权，k=60 为常见取值
+_RRF_K = 60
 
 _embeddings: Optional[HuggingFaceEmbeddings] = None
 
@@ -131,6 +138,15 @@ def build_index(force: bool = False) -> int:
         time.sleep(5)
         if not list(final_dir.glob("*/header.bin")):
             raise RuntimeError("HNSW 索引文件未成功写入，请重试构建。")
+        # 随版本持久化 BM25 稀疏索引；缺失/失败仅降级为纯向量，不阻断版本注册
+        try:
+            if is_available():
+                entries = [{"page_content": d.page_content, "metadata": d.metadata}
+                           for d in docs]
+                BM25Index(entries).save(final_dir / BM25_FILE)
+                logger.info("BM25 稀疏索引已随版本持久化: %s", final_dir / BM25_FILE)
+        except Exception:
+            logger.warning("BM25 索引构建失败（不影响向量检索）", exc_info=True)
         built_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         # 注册并原子切换 current 指针；此前查询链路始终指向旧版本/CHROMA_DIR
         register_version(f"chroma_v{ver}", str(final_dir), fp,
@@ -207,6 +223,11 @@ def _expand_query(query: str) -> str:
     return " ".join([query] + extra)
 
 
+def _l2_to_cosine(distance: float) -> float:
+    """把 Chroma 默认 l2 距离转为余弦相似度（向量已归一化：cos = 1 - d²/2）。"""
+    return max(0.0, 1.0 - (distance * distance) / 2.0)
+
+
 class KnowledgeBase:
     def __init__(self):
         from app.core.index_versioning import resolve_index_dir
@@ -216,18 +237,72 @@ class KnowledgeBase:
             collection_name=COLLECTION_NAME,
             embedding_function=get_embeddings(),
         )
+        # 稀疏检索索引（与向量索引同版本持久化）；缺失则降级为纯向量检索
+        self._bm25 = None
+        bm25_path = self._index_dir / BM25_FILE
+        if bm25_path.exists() and is_available():
+            try:
+                self._bm25 = BM25Index.load(bm25_path)
+                logger.info("BM25 稀疏索引已加载: %s", bm25_path)
+            except Exception as exc:
+                logger.warning("BM25 索引加载失败，降级为纯向量检索: %s", exc)
 
-    def search(self, query: str, k: int = TOP_K) -> List[Document]:
-        """全库均衡检索：查询扩展提升召回，来源均衡抽取（各来源等额、无优先级），
-        支持「病症 → 药物」的跨来源综合推荐。"""
+    def _enrich(self, query: str) -> str:
+        """查询扩展：口语症状同义词 + 章节探针 + 精确药名补足。"""
         from app.core.interaction_db import get_interaction_db
         drugs = get_interaction_db().find_drugs(query)
-        # 查询扩展：口语症状词转医学术语 + 命中药品名追加，提升召回命中率
-        enriched = " ".join([_expand_query(query)] + drugs)
-        # 多取候选：来源轮转均衡需要足够多的不同来源进入候选池
+        return " ".join([_expand_query(query)] + drugs)
+
+    def _scored_search(self, query: str, fetch_k: int) -> List[tuple]:
+        """带相关度分数的向量候选检索（未做来源均衡）。返回 (doc, cosine_score)。"""
+        hits = self.db.similarity_search_with_score(self._enrich(query), k=fetch_k)
+        return [(doc, _l2_to_cosine(score)) for doc, score in hits]
+
+    def _hybrid_search(self, query: str, fetch_k: int) -> List[Document]:
+        """BM25 稀疏 + 向量稠密检索，按 RRF 融合得分返回候选（未做来源均衡）。
+
+        BM25 索引缺失时自动退化为纯向量结果；稀疏召回命中的条目若不在向量结果
+        中，则按其 entry 重建 Document 参与融合。
+        """
+        enriched = self._enrich(query)
+        doc_by_key: dict = {}
+        rrf: dict = {}
+        vec = self.db.similarity_search_with_score(enriched, k=fetch_k)
+        for rank, (doc, _) in enumerate(vec, 1):
+            key = doc.page_content
+            doc_by_key[key] = doc
+            rrf[key] = rrf.get(key, 0.0) + 1.0 / (_RRF_K + rank)
+        if self._bm25 is not None:
+            for rank, (entry, _) in enumerate(self._bm25.search(enriched, fetch_k), 1):
+                key = entry["page_content"]
+                if key not in doc_by_key:
+                    doc_by_key[key] = Document(page_content=key,
+                                               metadata=entry["metadata"])
+                rrf[key] = rrf.get(key, 0.0) + 1.0 / (_RRF_K + rank)
+        ordered = sorted(rrf.items(), key=lambda kv: kv[1], reverse=True)[:fetch_k]
+        return [doc_by_key[key] for key, _ in ordered]
+
+    def top_relevance(self, query: str) -> float:
+        """返回查询的 top-1 余弦相关度（供置信度门控判断）。无结果返回 0.0。"""
+        hits = self._scored_search(query, fetch_k=1)
+        return hits[0][1] if hits else 0.0
+
+    def search(self, query: str, k: int = TOP_K, hybrid: bool = True) -> List[Document]:
+        """全库均衡检索：查询扩展提升召回，来源均衡抽取（各来源等额、无优先级），
+        支持「病症 → 药物」的跨来源综合推荐。
+
+        hybrid=True 走 BM25+向量 RRF 融合（默认）；False 退回纯向量，供 A/B 评测。
+        开启重排时先对融合候选精排，再来源均衡抽取。
+        """
         fetch_k = k * 5
-        merged = self.db.similarity_search(enriched, k=fetch_k)
-        return _diversify(merged, k)
+        if hybrid:
+            fused = self._hybrid_search(query, fetch_k)
+        else:
+            fused = [doc for doc, _ in self._scored_search(query, fetch_k)]
+        if RERANK_ENABLED:
+            from app.core.rerank import rerank
+            fused = rerank(query, fused)
+        return _diversify(fused, k)
 
     def count(self) -> int:
         try:
@@ -261,3 +336,9 @@ def get_knowledge_base() -> KnowledgeBase:
     if _kb is None:
         _kb = KnowledgeBase()
     return _kb
+
+
+def reset_knowledge_base() -> None:
+    """重建/回滚索引后调用：丢弃缓存的检索单例，下次访问指向新版本目录。"""
+    global _kb
+    _kb = None

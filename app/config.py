@@ -45,8 +45,24 @@ else:
     EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 COLLECTION_NAME = "drug_instructions"
 TOP_K = int(os.getenv("TOP_K", "12"))
+# 检索置信度门控：top-1 相关度低于该阈值时判定"未命中"，拒绝用低分噪声作答。
+# 设为 0 关闭门控。bge 归一化后相关度落在 [0,1]，真实命中通常 >0.35。
+MIN_RELEVANCE = float(os.getenv("MIN_RELEVANCE", "0.35"))
+# 引用合法性校验：开启时回答的 [n] 引用必须锚定到来源药名且不越界；失败时降级提示。
+STRICT_CITATION = os.getenv("STRICT_CITATION", "1") == "1"
 # 分块：单个分块最大字符数，超长章节按句切分
 CHUNK_MAX_CHARS = 500
+# 重排：CrossEncoder（交叉编码器）对候选分块精排，比双塔向量更精准。
+# 模型体积较大（bge-reranker-base ~1.1GB），需单独下载；默认关闭，缺失时透明回退原顺序。
+RERANK_ENABLED = os.getenv("RERANK_ENABLED", "0") == "1"
+LOCAL_RERANK_DIR = BASE_DIR / "models" / "bge-reranker-base"
+_rerank_env = os.getenv("RERANK_MODEL", "")
+if _rerank_env and Path(_rerank_env).is_dir():
+    RERANK_MODEL = _rerank_env
+elif (LOCAL_RERANK_DIR / "config.json").exists():
+    RERANK_MODEL = str(LOCAL_RERANK_DIR)
+else:
+    RERANK_MODEL = "BAAI/bge-reranker-base"
 
 # ---------- 大模型（OpenAI 兼容接口，国内大模型） ----------
 LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()

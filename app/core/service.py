@@ -22,7 +22,8 @@ from langchain.prompts import PromptTemplate
 from langchain.tools import StructuredTool
 
 from app.config import (DISCLAIMER, EMERGENCY_RESPONSE, HISTORY_TURNS,
-                        ONLINE_MODE, TOP_K)
+                        MIN_RELEVANCE, ONLINE_MODE, STRICT_CITATION, TOP_K)
+from app.core.citation_guard import validate_citations
 from app.core.guardrails import check_emergency
 from app.core.interaction_db import distinct_drugs, get_interaction_db, risk_text
 from app.core.logging_setup import get_logger
@@ -30,6 +31,18 @@ from app.core.offline import offline_answer
 from app.core.retrieval import get_knowledge_base
 
 logger = get_logger("med_safety.service")
+
+# 检索置信度不足时的降级回答（不调用大模型，避免低分噪声污染答案）
+NO_MATCH_RESPONSE = (
+    "抱歉，现有资料中未检索到足够相关的信息，无法可靠回答该问题。"
+    "请换一种问法，或提供具体的药品名称。"
+)
+
+# 引用校验未通过时追加的警示（STRICT_CITATION 开启时生效）
+CITATION_WARNING = (
+    "\n\n> ⚠️ 本回答的部分引用未能通过来源校验，内容已标注请谨慎采信，"
+    "建议进一步向药师或医生核实。"
+)
 
 # ---------------------------------------------------------------
 # 提示词模板
@@ -141,15 +154,22 @@ async def _rag_stream(question, history, kb, docs):
         if tok:
             answer += tok
             yield {"type": "token", "content": tok}
+    sources = _sources_from_docs(docs)
+    # 引用校验：声明 [n] 的 body 必须能锚定到对应来源药名且不越界；失败追加警示。
+    citation = validate_citations(answer, sources)
+    if STRICT_CITATION and not citation["ok"]:
+        logger.warning("在线 RAG 引用校验未通过: %s", citation)
+        answer += CITATION_WARNING
+        async for ev in _yield_tokens(CITATION_WARNING):
+            yield ev
     # 免责声明必须走 token 事件：前端渲染与 SSE 落盘都只消费 token，
     # 只拼进 done.answer 会让在线模式的声明在界面与历史里双双丢失。
     answer += DISCLAIMER
     async for ev in _yield_tokens(DISCLAIMER):
         yield ev
-    sources = _sources_from_docs(docs)
-    yield {"type": "sources", "sources": sources}
+    yield {"type": "sources", "sources": sources, "citation": citation}
     yield {"type": "done", "answer": answer, "sources": sources,
-           "path": "rag", "mode": "online"}
+           "citation": citation, "path": "rag", "mode": "online"}
 
 
 # ---------------------------------------------------------------
@@ -256,12 +276,16 @@ async def _agent_stream(question, history, kb, docs):
             sources.extend(_sources_from_tool_output(observation))
         elif _action.tool == "query_drug_interaction":
             sources.extend(_sources_from_interaction_output(observation))
+    citation = validate_citations(answer, sources)
+    if STRICT_CITATION and not citation["ok"]:
+        logger.warning("Agent 引用校验未通过: %s", citation)
+        answer += CITATION_WARNING
     answer += DISCLAIMER
     async for ev in _yield_tokens(answer):
         yield ev
-    yield {"type": "sources", "sources": sources}
+    yield {"type": "sources", "sources": sources, "citation": citation}
     yield {"type": "done", "answer": answer, "sources": sources,
-           "path": "agent", "mode": "online"}
+           "citation": citation, "path": "agent", "mode": "online"}
 
 
 # ---------------------------------------------------------------
@@ -301,6 +325,21 @@ async def answer_stream(question: str,
 
     kb = get_knowledge_base()
     is_interaction, drugs = classify_interaction(question, history)
+    # 置信度门控：在线模式且非相互作用问题时，若 top-1 相关度低于阈值，
+    # 直接降级为「未找到相关资料」，不把低分噪声喂给大模型（减少幻觉）。
+    if use_online and not is_interaction and MIN_RELEVANCE > 0 \
+            and kb.top_relevance(question) < MIN_RELEVANCE:
+        logger.warning("检索置信度不足，降级回答: %s", question[:60])
+        answer = NO_MATCH_RESPONSE + DISCLAIMER
+        yield {"type": "start", "path": "rag", "mode": "online",
+               "interaction": False, "no_match": True}
+        async for ev in _yield_tokens(answer):
+            yield ev
+        yield {"type": "sources", "sources": [], "citation": {"ok": True, "cited": []}}
+        yield {"type": "done", "answer": answer, "sources": [],
+               "path": "rag", "mode": "online", "no_match": True,
+               "citation": {"ok": True, "cited": []}}
+        return
     docs = kb.search(question, k=TOP_K)
     hits = []
     if is_interaction:

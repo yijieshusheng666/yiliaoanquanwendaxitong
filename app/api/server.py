@@ -17,7 +17,9 @@ from pydantic import BaseModel
 
 from app.config import HISTORY_TURNS, PDF_DIR
 from app import __version__
+from app.api.admin_routes import router as admin_router
 from app.api.user_routes import get_optional_user, router as user_router
+from app.core import audit as audit_core
 from app.core.chat_history import (append, create_conversation,
                                    delete_conversation, get_conversation_owner,
                                    get_messages, list_conversations)
@@ -67,6 +69,7 @@ app = FastAPI(
 )
 
 app.include_router(user_router)
+app.include_router(admin_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -174,6 +177,10 @@ async def chat(req: ChatRequest,
     if sid:
         append(sid, "user", question)
 
+    if user:
+        audit_core.record("chat", question[:200],
+                          user_id=str(user["id"]), username=user["username"])
+
     if req.stream:
         return _sse(question, history, sid)
 
@@ -239,13 +246,19 @@ async def feedback(req: FeedbackRequest,
     item = record_feedback(req.question, req.answer, req.rating,
                            session_id=req.session_id, source="web",
                            user_id=uid or "")
+    # 点踩自动进入争议审核队列，供管理员复核并回流知识库
+    if req.rating < 0:
+        from app.core import review as review_core
+        review_core.enqueue(req.question, req.answer,
+                            session_id=req.session_id, user_id=uid or "")
     return {"ok": True, "record": item}
 
 
 @app.get("/api/stats")
 async def stats():
-    """系统统计：文档数、反馈汇总、模式。"""
+    """系统统计：文档数、反馈汇总、待审核争议数、模式。"""
     from app.config import ONLINE_MODE
+    from app.core import review as review_core
     from app.core.retrieval import get_knowledge_base
     try:
         doc_count = get_knowledge_base().count()
@@ -255,6 +268,7 @@ async def stats():
         "vector_docs": doc_count,
         "interaction_pairs": len(get_interaction_db().rows),
         "feedback": feedback_summary(),
+        "review": review_core.summary(),
         "mode": "online" if ONLINE_MODE else "offline",
     }
 

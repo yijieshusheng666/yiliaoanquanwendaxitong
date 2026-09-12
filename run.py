@@ -1,13 +1,13 @@
-"""一键启动：自动生成数据 + 构建索引 + 启动 API（8000）与 Gradio UI（7860）。
+"""一键启动：生成数据 → 构建索引 → 启动 FastAPI（8000）+ 可选前端开发服务器。
 
 用法：
-  python run.py              # 同时启动 API + UI
-  python run.py --api-only   # 仅启动 FastAPI
-  python run.py --ui-only    # 仅启动 Gradio
+  python run.py                    # 启动 API + 自动打开 Vue 开发服务器（需先 npm install）
+  python run.py --api-only         # 仅启动 FastAPI（前端用 dist 静态产物或另行托管）
 """
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import threading
 
@@ -32,17 +32,22 @@ def ensure_index():
     try:
         n = build_index()
     except RuntimeError as exc:
-        # 语料为空等硬错误：宁可启动失败，也不要带着空索引跑（此后会一直答"未找到"）
         print(f"[2/3] 索引构建失败：{exc}")
         sys.exit(1)
     print(f"[2/3] 索引构建完成：{n} 个分块")
 
 
-def start_gradio():
-    from app.config import UI_PORT
-    from app.ui.gradio_app import build_ui
-    print(f"[3/3] Gradio UI 启动中: http://127.0.0.1:{UI_PORT}")
-    build_ui().queue().launch(server_name="0.0.0.0", server_port=UI_PORT)
+def start_vite():
+    """启动 Vue 开发服务器（后台线程）。"""
+    from app.config import BASE_DIR
+    frontend = BASE_DIR / "frontend"
+    if not (frontend / "node_modules").exists():
+        print("[3/3] frontend/node_modules 缺失，先执行 npm install ...")
+        subprocess.run(["npm", "install"], cwd=frontend, check=True)
+    # 使用指定解释器执行 npm run dev（Windows npm.cmd）
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+    print("[3/3] Vue 开发服务器启动中: http://localhost:5173")
+    subprocess.run([npm, "run", "dev"], cwd=frontend)
 
 
 def start_api():
@@ -54,8 +59,7 @@ def start_api():
 
 def main():
     parser = argparse.ArgumentParser(description="医疗安全问答系统一键启动")
-    parser.add_argument("--api-only", action="store_true", help="仅启动 FastAPI")
-    parser.add_argument("--ui-only", action="store_true", help="仅启动 Gradio")
+    parser.add_argument("--api-only", action="store_true", help="仅启动 FastAPI（不带前端 dev server）")
     args = parser.parse_args()
 
     ensure_data()
@@ -63,10 +67,8 @@ def main():
 
     if args.api_only:
         start_api()
-    elif args.ui_only:
-        start_gradio()
     else:
-        threading.Thread(target=start_gradio, daemon=True).start()
+        threading.Thread(target=start_vite, daemon=True).start()
         start_api()
 
 

@@ -9,6 +9,8 @@
 - 口令比对使用 hmac.compare_digest（常量时间，防时序侧信道）；
 - 与既有会话库共用 chat_history.db：users / auth_tokens 两张新表
   幂等建表，不影响 conversations / messages。
+- 角色（RBAC）：user=普通用户 / admin=管理员（可访问审计与用户管理接口）。
+  注册时若库中尚不存在 admin，则用户名 ``admin`` 自动成为管理员（引导策略）。
 """
 from __future__ import annotations
 
@@ -28,6 +30,10 @@ TOKEN_TTL_DAYS = 7
 _PBKDF2_ITER = 200_000
 _SALT_BYTES = 16
 
+# 角色常量
+ROLE_USER = "user"
+ROLE_ADMIN = "admin"
+
 
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -38,8 +44,10 @@ def _connect() -> sqlite3.Connection:
         "username TEXT NOT NULL UNIQUE,"
         "password_hash TEXT NOT NULL,"
         "created_at REAL NOT NULL,"
-        "is_active INTEGER NOT NULL DEFAULT 1)"
+        "is_active INTEGER NOT NULL DEFAULT 1,"
+        "role TEXT NOT NULL DEFAULT 'user')"
     )
+    _ensure_role_column(conn)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS auth_tokens ("
         "token_hash TEXT PRIMARY KEY,"
@@ -52,6 +60,14 @@ def _connect() -> sqlite3.Connection:
     )
     conn.commit()
     return conn
+
+
+def _ensure_role_column(conn: sqlite3.Connection) -> None:
+    """旧库 users 表无 role 列时补充（幂等），不破坏既有账号。"""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "role" not in cols:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
 
 
 # ---------------------------------------------------------------
@@ -83,7 +99,10 @@ def verify_password(password: str, stored: str) -> bool:
 # 用户 CRUD
 # ---------------------------------------------------------------
 def register(username: str, password: str) -> Optional[Dict]:
-    """注册新用户，成功返回用户 dict；用户名冲突/参数非法返回 None。"""
+    """注册新用户，成功返回用户 dict；用户名冲突/参数非法返回 None。
+
+    引导策略：库中尚无 admin 且用户名为 ``admin`` 时，自动授予管理员角色。
+    """
     username = (username or "").strip()
     if not (3 <= len(username) <= 32):
         return None
@@ -96,26 +115,29 @@ def register(username: str, password: str) -> Optional[Dict]:
                 "SELECT 1 FROM users WHERE username=?", (username,)).fetchone()
             if exists:
                 return None
+            has_admin = conn.execute(
+                "SELECT 1 FROM users WHERE role='admin' LIMIT 1").fetchone()
+            role = ROLE_ADMIN if (username == "admin" and not has_admin) else ROLE_USER
             now = time.time()
             cur = conn.execute(
-                "INSERT INTO users(username, password_hash, created_at, is_active) "
-                "VALUES (?,?,?,1)",
-                (username, hash_password(password), now))
+                "INSERT INTO users(username, password_hash, created_at, is_active, role) "
+                "VALUES (?,?,?,1,?)",
+                (username, hash_password(password), now, role))
             conn.commit()
             return {"id": cur.lastrowid, "username": username,
-                    "created_at": now}
+                    "created_at": now, "role": role}
         finally:
             conn.close()
 
 
 def authenticate(username: str, password: str) -> Optional[Dict]:
-    """校验用户名密码；成功返回用户 dict，失败返回 None。"""
+    """校验用户名密码；成功返回用户 dict（含 role），失败返回 None。"""
     username = (username or "").strip()
     with _LOCK:
         conn = _connect()
         try:
             row = conn.execute(
-                "SELECT id, username, password_hash, created_at, is_active "
+                "SELECT id, username, password_hash, created_at, is_active, role "
                 "FROM users WHERE username=?", (username,)).fetchone()
         finally:
             conn.close()
@@ -123,7 +145,8 @@ def authenticate(username: str, password: str) -> Optional[Dict]:
         return None
     if not verify_password(password, row[2]):
         return None
-    return {"id": row[0], "username": row[1], "created_at": row[3]}
+    return {"id": row[0], "username": row[1], "created_at": row[3],
+            "role": row[5]}
 
 
 # ---------------------------------------------------------------
@@ -160,12 +183,12 @@ def get_user_by_token(token: str) -> Optional[Dict]:
         try:
             row = conn.execute(
                 "SELECT t.user_id, t.expires_at, u.username, u.created_at, "
-                "       u.is_active, u.id "
+                "       u.is_active, u.id, u.role "
                 "FROM auth_tokens t JOIN users u ON u.id = t.user_id "
                 "WHERE t.token_hash=?", (token_hash,)).fetchone()
             if row and row[1] > now and row[4]:
                 user = {"id": row[0], "username": row[2],
-                        "created_at": row[3]}
+                        "created_at": row[3], "role": row[6]}
             else:
                 user = None
         finally:
@@ -187,3 +210,20 @@ def revoke_token(token: str) -> bool:
             return cur.rowcount > 0
         finally:
             conn.close()
+
+
+def list_users() -> list:
+    """返回全部用户（供管理员用户列表）。"""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, username, created_at, is_active, role "
+                "FROM users ORDER BY id").fetchall()
+        finally:
+            conn.close()
+    return [
+        {"id": r[0], "username": r[1], "created_at": r[2],
+         "is_active": bool(r[3]), "role": r[4]}
+        for r in rows
+    ]
