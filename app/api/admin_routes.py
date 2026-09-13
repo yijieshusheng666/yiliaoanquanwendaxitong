@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from app.config import TEXT_DIR
 from app.core import audit as audit_core
 from app.core import review as review_core
-from app.core.ingestion import chunk_document, parse_txt
+from app.core.ingestion import SECTION_RE, chunk_document, parse_txt
 from app.core.index_versioning import (current_version, index_is_ready,
                                        list_versions, resolve_index_dir, rollback)
 from app.api.user_routes import require_admin
@@ -29,6 +29,57 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 # 仅拦截路径穿越（/ \ ..）与 Windows 非法文件名字符，保留中文/括号等合法药名
 _INVALID_RE = re.compile(r'[/\\:*?"<>|]')
+
+# 标准章节白名单：录入非白名单章节仅告警不阻断（区别于镜像/preview 等权威章节）
+SECTION_WHITELIST = {
+    "成分", "性状", "适应症", "用法用量", "不良反应", "禁忌", "注意事项",
+    "特殊人群用药", "孕妇及哺乳期妇女用药", "儿童用药", "老年用药",
+    "药物相互作用", "药物过量", "药物相容性", "贮藏", "有效期",
+    "人工审核补充",  # 反馈回流产生的章节，需允许避免误报
+}
+# 必填章节：缺失则禁止保存，保证问答可溯源"治什么 / 怎么吃"
+REQUIRED_SECTIONS = ("适应症", "用法用量")
+_DDI_BODY_RE = re.compile(r"【药物相互作用】([\s\S]*?)(?=【|$)")
+DDI_RISK_RE = re.compile(r"（\s*风险\s*[：:]\s*(高|中|低)\s*）")
+
+DOC_TEMPLATE = (
+    "【适应症】用于敏感菌引起的感染，如呼吸道感染、泌尿道感染等。\n"
+    "【用法用量】成人一次0.5g，一日3次，饭后服用。\n"
+    "【不良反应】常见恶心、腹泻、皮疹；偶见过敏反应。\n"
+    "【禁忌】对本品任一成分过敏者禁用。\n"
+    "【注意事项】肝肾功能不全者慎用；服用期间避免饮酒。\n"
+    "【特殊人群用药】孕妇慎用；哺乳期妇女用药期间暂停哺乳。\n"
+    "【药物相互作用】甲硝唑胶囊（风险：中）：合用增强抗菌谱但增加胃肠道反应。；"
+    "丙磺舒片（风险：中）：抑制肾小管排泄，延长血药浓度。；"
+    "华法林钠片（风险：高）：增强抗凝作用，需监测INR。\n"
+    "【贮藏】密封，置阴凉干燥处保存。\n"
+)
+
+
+def validate_doc_content(content: str) -> tuple[list[str], list[str]]:
+    """格式校验：返回 (errors, warnings)。errors 非空则禁止保存。"""
+    content = content or ""
+    errors: list[str] = []
+    warnings: list[str] = []
+    names = SECTION_RE.findall(content)
+    if not names:
+        errors.append("未识别到任何【章节】标记，请按标准模板使用 【章节名】内容 格式")
+    if content.count("【") != content.count("】"):
+        errors.append("【】数量不匹配，存在未闭合的章节标记")
+    for req in REQUIRED_SECTIONS:
+        if req not in names:
+            errors.append(f"缺少必填章节 【{req}】")
+    for sname in names:
+        if sname not in SECTION_WHITELIST:
+            warnings.append(f"章节 【{sname}】 不在标准白名单内，请核实命名")
+    m = _DDI_BODY_RE.search(content)
+    if m and (body := m.group(1).strip()):
+        for entry in re.split(r"[。；]", body):
+            entry = entry.strip()
+            if entry and not DDI_RISK_RE.search(entry):
+                warnings.append(
+                    f"药物相互作用条目「{entry[:16]}…」缺少（风险：高/中/低）标注")
+    return errors, warnings
 
 
 def _sanitize_name(name: str) -> str:
@@ -46,6 +97,10 @@ def _txt_path(name: str) -> Path:
 class DocumentUpsert(BaseModel):
     name: str
     content: str
+
+
+class DocumentOrganize(BaseModel):
+    raw_text: str
 
 
 # ---------------------------------------------------------------
@@ -75,6 +130,9 @@ async def upsert_document(req: DocumentUpsert, user: dict = Depends(require_admi
     content = req.content or ""
     if not content.strip():
         return JSONResponse(status_code=400, content={"detail": "内容不能为空"})
+    errors, warnings = validate_doc_content(content)
+    if errors:
+        return JSONResponse(status_code=400, content={"detail": "；".join(errors)})
     TEXT_DIR.mkdir(parents=True, exist_ok=True)
     path = _txt_path(name)
     existed = path.exists()
@@ -82,7 +140,35 @@ async def upsert_document(req: DocumentUpsert, user: dict = Depends(require_admi
     audit_core.record("upsert_document", f"{'更新' if existed else '新增'}文档 {name}",
                       user_id=str(user["id"]), username=user["username"])
     return {"ok": True, "name": name, "existed": existed,
+            "warnings": warnings,
             "hint": "索引尚未重建，请前往「索引管理」执行重建"}
+
+
+@router.get("/documents/template")
+async def document_template(user: dict = Depends(require_admin)):
+    """标准模板元信息：前端「载入模板」按钮数据源，保证前后端约定单一来源。"""
+    return {"template": DOC_TEMPLATE,
+            "required": list(REQUIRED_SECTIONS),
+            "allowed": sorted(SECTION_WHITELIST),
+            "ddi_format": "药品名（风险：高/中/低）：描述，多条用「。；」分隔"}
+
+
+@router.post("/documents/organize")
+async def organize_document(req: DocumentOrganize, user: dict = Depends(require_admin)):
+    """AI 智能整理：用 LLM 把说明书原文整理为标准模板文本。只返回整理结果，不落库。"""
+    from app.config import ONLINE_MODE
+    if not ONLINE_MODE:
+        return JSONResponse(status_code=400,
+                            content={"detail": "当前为离线模式，需配置 LLM_API_KEY 才可使用 AI 整理"})
+    raw = (req.raw_text or "").strip()
+    if not raw:
+        return JSONResponse(status_code=400, content={"detail": "原文为空，请粘贴说明书文本"})
+    from app.core.document_organizer import organize_to_template
+    try:
+        organized = await run_in_threadpool(organize_to_template, raw)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=400, content={"detail": f"AI 整理失败：{exc}"})
+    return {"organized": organized}
 
 
 @router.get("/documents/{name}")

@@ -2,8 +2,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Refresh } from '@element-plus/icons-vue'
+import { Upload, Refresh, Document } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { getStats } from '@/api/stats'
 import * as adminApi from '@/api/admin'
 import type { DocItem, DocSection, IndexVersion, ReviewItem } from '@/api/admin'
 
@@ -12,6 +13,11 @@ const route = useRoute()
 const auth = useAuthStore()
 
 const activeTab = ref('docs')
+
+// AI 智能整理
+const rawText = ref('')
+const organizing = ref(false)
+const onlineMode = ref(true)
 
 // 文档管理
 const docs = ref<DocItem[]>([])
@@ -47,8 +53,31 @@ onMounted(async () => {
   }
   const tab = route.query.tab
   if (tab === 'review' || tab === 'index' || tab === 'docs') activeTab.value = tab
-  await Promise.all([refreshDocs(), refreshIndex(), refreshReviews()])
+  await Promise.all([refreshDocs(), refreshIndex(), refreshReviews(), refreshMode()])
 })
+
+async function refreshMode() {
+  try {
+    const st = await getStats()
+    onlineMode.value = st.mode === 'online'
+  } catch {
+    /* 默认在线，离线禁用由后端 400 兜底 */
+  }
+}
+
+async function doOrganize() {
+  if (!rawText.value.trim()) return ElMessage.warning('请先粘贴药品说明书原文')
+  organizing.value = true
+  try {
+    const res = await adminApi.organizeDocument(rawText.value)
+    docContent.value = res.organized
+    ElMessage.success('已生成整理结果，请确认后点击「保存文档」')
+  } catch (e) {
+    ElMessage.error((e as Error).message || 'AI 整理失败')
+  } finally {
+    organizing.value = false
+  }
+}
 
 async function refreshDocs() {
   loadingDocs.value = true
@@ -94,9 +123,29 @@ async function saveDoc() {
   const name = docName.value.trim()
   if (!name) return ElMessage.warning('请填写药品名')
   if (!docContent.value.trim()) return ElMessage.warning('请填写或读取说明书内容')
-  const res = await adminApi.upsertDocument(name, docContent.value)
-  ElMessage.success(res.existed ? `已更新「${name}」，记得重建索引` : `已新增「${name}」，记得重建索引`)
-  await refreshDocs()
+  try {
+    const res = await adminApi.upsertDocument(name, docContent.value)
+    const msg = res.existed ? `已更新「${name}」` : `已新增「${name}」`
+    if (res.warnings?.length) {
+      ElMessage.warning(`${msg}，但存在格式提醒：${res.warnings[0]}`)
+      res.warnings.slice(1).forEach((w) => ElMessage.warning(w))
+    } else {
+      ElMessage.success(`${msg}，记得重建索引`)
+    }
+    await refreshDocs()
+  } catch (e) {
+    ElMessage.error((e as Error).message || '保存失败')
+  }
+}
+
+async function loadTemplate() {
+  try {
+    const t = await adminApi.getDocTemplate()
+    docContent.value = t.template
+    ElMessage.info(`已载入标准模板（必填：${t.required.join('、')}），请替换为实际内容`)
+  } catch (e) {
+    ElMessage.error((e as Error).message || '模板加载失败')
+  }
 }
 
 async function openPreview(row: DocItem) {
@@ -208,6 +257,27 @@ function fmtSize(n: number) {
     <el-tabs v-model="activeTab" class="admin-tabs">
       <el-tab-pane label="文档管理" name="docs">
         <section class="panel">
+          <h3 class="panel-title">AI 智能整理导入</h3>
+          <el-input
+            v-model="rawText"
+            type="textarea"
+            :rows="6"
+            placeholder="粘贴药品说明书 TXT 原文，一键用大模型整理成标准章节格式"
+          />
+          <div class="panel-actions">
+            <el-tooltip :disabled="onlineMode" content="当前为离线模式，需配置 LLM_API_KEY 后启用">
+              <span>
+                <el-button type="success" :loading="organizing" :disabled="!onlineMode" @click="doOrganize">
+                  AI 智能整理
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-button @click="rawText = ''">清空原文</el-button>
+          </div>
+          <p class="hint">整理结果会填入下方编辑区，供你确认与修改；只有点击「保存文档」才会真正入库。</p>
+        </section>
+
+        <section class="panel">
           <h3 class="panel-title">新增 / 更新文档</h3>
           <div class="upload-row">
             <input
@@ -218,13 +288,14 @@ function fmtSize(n: number) {
               @change="onFileChange"
             />
             <el-button :icon="Upload" @click="pickFile">从文件读取</el-button>
+            <el-button :icon="Document" @click="loadTemplate">载入模板</el-button>
             <el-input v-model="docName" placeholder="药品名（如 阿莫西林）" class="name-input" />
           </div>
           <el-input
             v-model="docContent"
             type="textarea"
             :rows="8"
-            placeholder="粘贴说明书文本，按【章节】结构化，例如：【适应症】…【用法用量】…"
+            placeholder="粘贴说明书文本，按【章节】结构化，含必填章节【适应症】与【用法用量】；可点「载入模板」生成标准骨架"
           />
           <div class="panel-actions">
             <el-button type="primary" @click="saveDoc">保存文档</el-button>

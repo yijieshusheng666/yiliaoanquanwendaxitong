@@ -26,10 +26,32 @@ export function listDocuments() {
 }
 
 export function upsertDocument(name: string, content: string) {
-  return api.post<{ ok: boolean; name: string; existed: boolean; hint?: string }>(
-    '/api/admin/documents',
-    { name, content },
-  )
+  return api.post<{
+    ok: boolean
+    name: string
+    existed: boolean
+    warnings?: string[]
+    hint?: string
+  }>('/api/admin/documents', { name, content })
+}
+
+export interface DocTemplate {
+  template: string
+  required: string[]
+  allowed: string[]
+  ddi_format: string
+}
+
+export function getDocTemplate() {
+  return api.get<DocTemplate>('/api/admin/documents/template')
+}
+
+export interface OrganizeResult {
+  organized: string
+}
+
+export function organizeDocument(rawText: string) {
+  return api.post<OrganizeResult>('/api/admin/documents/organize', { raw_text: rawText })
 }
 
 export function deleteDocument(name: string) {
