@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, Refresh, Document } from '@element-plus/icons-vue'
@@ -19,6 +19,10 @@ const rawText = ref('')
 const organizing = ref(false)
 const onlineMode = ref(true)
 
+// 章节完整性提醒
+const missingRequired = ref<string[]>([])
+const missingOptional = ref<string[]>([])
+
 // 文档管理
 const docs = ref<DocItem[]>([])
 const loadingDocs = ref(false)
@@ -27,6 +31,27 @@ const docContent = ref('')
 const fileInput = ref<HTMLInputElement>()
 const previewVisible = ref(false)
 const preview = ref<{ name: string; chunk_count: number; sections: DocSection[] } | null>(null)
+
+let completenessTimer: number | undefined
+watch(docContent, () => {
+  clearTimeout(completenessTimer)
+  completenessTimer = window.setTimeout(checkCompleteness, 400)
+})
+
+async function checkCompleteness() {
+  if (!docContent.value.trim()) {
+    missingRequired.value = []
+    missingOptional.value = []
+    return
+  }
+  try {
+    const r = await adminApi.analyzeDocument(docContent.value)
+    missingRequired.value = r.missing_required
+    missingOptional.value = r.missing_optional
+  } catch {
+    /* 分析失败不阻塞编辑 */
+  }
+}
 
 // 索引管理
 const idxReady = ref(false)
@@ -297,6 +322,17 @@ function fmtSize(n: number) {
             :rows="8"
             placeholder="粘贴说明书文本，按【章节】结构化，含必填章节【适应症】与【用法用量】；可点「载入模板」生成标准骨架"
           />
+          <div v-if="missingRequired.length || missingOptional.length" class="completeness-warn">
+            <div class="cw-title">以下章节未完善，建议补充后再保存：</div>
+            <div v-if="missingRequired.length" class="cw-item cw-req">
+              <span class="cw-tag">必填</span>{{ missingRequired.join('、') }}
+            </div>
+            <div v-if="missingOptional.length" class="cw-item">
+              <span class="cw-tag">可选</span>{{ missingOptional.join('、') }}
+            </div>
+            <div v-if="missingRequired.length" class="cw-note">缺少必填章节时无法保存，请在下方补全对应内容。</div>
+          </div>
+          <div v-else-if="docContent.trim()" class="completeness-ok">标准章节结构完整</div>
           <div class="panel-actions">
             <el-button type="primary" @click="saveDoc">保存文档</el-button>
             <el-button @click="docName = ''; docContent = ''">清空</el-button>
@@ -507,6 +543,52 @@ function fmtSize(n: number) {
   margin-top: 14px;
   display: flex;
   gap: 10px;
+}
+.completeness-warn {
+  margin-top: 12px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #ad6800;
+  line-height: 1.7;
+}
+.cw-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.cw-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: #ffd591;
+  color: #874d00;
+  font-weight: 600;
+}
+.cw-item.cw-req .cw-tag {
+  background: #f5222d;
+  color: #fff;
+}
+.cw-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #d4380d;
+}
+.completeness-ok {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #389e0d;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 6px;
+  padding: 8px 14px;
 }
 .hint {
   margin: 12px 0 0;

@@ -90,6 +90,20 @@ def _sanitize_name(name: str) -> str:
     return name if 1 <= len(name) <= 64 else ""
 
 
+def analyze_doc_completeness(content: str) -> dict:
+    """章节完整性分析：找出标准章节中缺失必填/可选章节，供前端提醒"哪里没完善"。"""
+    present = [s for s in SECTION_RE.findall(content or "") if s in SECTION_WHITELIST]
+    present_set = set(present)
+    required_missing = [s for s in REQUIRED_SECTIONS if s not in present_set]
+    optional_missing = sorted(
+        s for s in SECTION_WHITELIST
+        if s not in present_set and s not in REQUIRED_SECTIONS and s != "人工审核补充")
+    return {"present": present,
+            "missing_required": required_missing,
+            "missing_optional": optional_missing,
+            "complete": not required_missing}
+
+
 def _txt_path(name: str) -> Path:
     return TEXT_DIR / f"{name}.txt"
 
@@ -169,6 +183,12 @@ async def organize_document(req: DocumentOrganize, user: dict = Depends(require_
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(status_code=400, content={"detail": f"AI 整理失败：{exc}"})
     return {"organized": organized}
+
+
+@router.post("/documents/analyze")
+async def analyze_document(req: DocumentOrganize, user: dict = Depends(require_admin)):
+    """章节完整性分析：返回标准章节中缺失的必填/可选章节，供前端实时提醒。纯规则、不耗 LLM。"""
+    return analyze_doc_completeness(req.raw_text or "")
 
 
 @router.get("/documents/{name}")

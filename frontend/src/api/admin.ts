@@ -54,6 +54,17 @@ export function organizeDocument(rawText: string) {
   return api.post<OrganizeResult>('/api/admin/documents/organize', { raw_text: rawText })
 }
 
+export interface CompletenessResult {
+  present: string[]
+  missing_required: string[]
+  missing_optional: string[]
+  complete: boolean
+}
+
+export function analyzeDocument(content: string) {
+  return api.post<CompletenessResult>('/api/admin/documents/analyze', { raw_text: content })
+}
+
 export function deleteDocument(name: string) {
   return api.del<{ ok: boolean }>(`/api/admin/documents/${encodeURIComponent(name)}`)
 }
