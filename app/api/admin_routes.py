@@ -7,10 +7,9 @@
 
 鉴权：全部接口 require_admin（Bearer token，role=admin）。
 """
-from __future__ import annotations
-
 import re
 from pathlib import Path
+from typing import List
 
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
@@ -117,6 +116,15 @@ class DocumentOrganize(BaseModel):
     raw_text: str
 
 
+class BatchItem(BaseModel):
+    name: str
+    content: str
+
+
+class BatchImportReq(BaseModel):
+    items: List[BatchItem]
+
+
 # ---------------------------------------------------------------
 # 文档管理
 # ---------------------------------------------------------------
@@ -189,6 +197,49 @@ async def organize_document(req: DocumentOrganize, user: dict = Depends(require_
 async def analyze_document(req: DocumentOrganize, user: dict = Depends(require_admin)):
     """章节完整性分析：返回标准章节中缺失的必填/可选章节，供前端实时提醒。纯规则、不耗 LLM。"""
     return analyze_doc_completeness(req.raw_text or "")
+
+
+@router.post("/documents/batch-import")
+async def batch_import_documents(req: BatchImportReq, user: dict = Depends(require_admin)):
+    """批量导入多份药品文档（json：items=[{name, content}]）。逐份校验，一份失败不中断其他。"""
+    imported = 0
+    results: list = []
+    seen: set = set()
+    for it in req.items:
+        name = _sanitize_name(it.name)
+        content = (it.content or "").strip()
+        if not name:
+            results.append({"name": it.name, "ok": False, "error": "药品名不合法，请重命名"})
+            continue
+        if name in seen:
+            results.append({"name": name, "ok": False, "error": "清单内重名，请修改其中一个名称"})
+            continue
+        if not content:
+            results.append({"name": name, "ok": False, "error": "内容为空"})
+            continue
+        comp = analyze_doc_completeness(content)
+        if comp["missing_required"]:
+            results.append({
+                "name": name, "ok": False,
+                "error": "缺少必填章节 " + "、".join(comp["missing_required"]),
+                "missing_required": comp["missing_required"],
+                "missing_optional": comp["missing_optional"],
+            })
+            continue
+        seen.add(name)
+        path = _txt_path(name)
+        TEXT_DIR.mkdir(parents=True, exist_ok=True)
+        existed = path.exists()
+        path.write_text(content, encoding="utf-8")
+        audit_core.record("batch_import", f"批量导入药品 {name}", user_id=str(user["id"]),
+                          username=user["username"])
+        imported += 1
+        results.append({"name": name, "ok": True, "existed": existed,
+                        "missing_optional": comp["missing_optional"]})
+    if imported:
+        audit_core.record("batch_import", f"批量导入完成，共 {imported} 份", user_id=str(user["id"]),
+                          username=user["username"])
+    return {"ok": True, "imported": imported, "results": results}
 
 
 @router.get("/documents/{name}")

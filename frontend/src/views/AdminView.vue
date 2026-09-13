@@ -32,6 +32,23 @@ const fileInput = ref<HTMLInputElement>()
 const previewVisible = ref(false)
 const preview = ref<{ name: string; chunk_count: number; sections: DocSection[] } | null>(null)
 
+// 批量导入
+interface BatchRow {
+  name: string
+  content: string
+  missing_required: string[]
+  missing_optional: string[]
+  editing: boolean
+}
+const batchInput = ref<HTMLInputElement>()
+const batchDialog = ref(false)
+const batchRows = ref<BatchRow[]>([])
+const batchImporting = ref(false)
+const batchSelection = ref<BatchRow[]>([])
+const batchEditDialog = ref(false)
+const batchEditRow = ref<BatchRow | null>(null)
+const batchEditContent = ref('')
+
 let completenessTimer: number | undefined
 watch(docContent, () => {
   clearTimeout(completenessTimer)
@@ -101,6 +118,84 @@ async function doOrganize() {
     ElMessage.error((e as Error).message || 'AI 整理失败')
   } finally {
     organizing.value = false
+  }
+}
+
+function openBatchFiles() {
+  batchInput.value?.click()
+}
+
+function onBatchFiles(e: Event) {
+  const files = Array.from((e.target as HTMLInputElement).files || [])
+  if (!files.length) return
+  batchRows.value = []
+  let pending = files.length
+  files.forEach((f) => {
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const content = String(reader.result || '').replace(/^\uFEFF/, '')
+      const name = f.name.replace(/\.txt$/i, '') || f.name
+      let row: BatchRow = { name, content, missing_required: [], missing_optional: [], editing: false }
+      if (content.trim()) {
+        try {
+          const r = await adminApi.analyzeDocument(content)
+          row.missing_required = r.missing_required
+          row.missing_optional = r.missing_optional
+        } catch { /* 忽略分析失败 */ }
+      }
+      batchRows.value.push(row)
+      if (--pending <= 0) {
+        batchDialog.value = true
+        if (batchInput.value) batchInput.value.value = ''
+      }
+    }
+    reader.readAsText(f, 'utf-8')
+  })
+}
+
+function openBatchEdit(row: BatchRow) {
+  batchEditRow.value = row
+  batchEditContent.value = row.content
+  batchEditDialog.value = true
+}
+
+function saveBatchEdit() {
+  if (!batchEditRow.value) return
+  batchEditRow.value.content = batchEditContent.value
+  adminApi
+    .analyzeDocument(batchEditContent.value)
+    .then((r) => {
+      batchEditRow.value!.missing_required = r.missing_required
+      batchEditRow.value!.missing_optional = r.missing_optional
+    })
+    .catch(() => {})
+  batchEditDialog.value = false
+}
+
+function batchDoesImportable(row: BatchRow) {
+  return !!(row.content.trim() && row.name.trim() && !row.missing_required.length)
+}
+
+function batchSelectable(row: BatchRow) {
+  return batchDoesImportable(row)
+}
+
+async function submitBatch() {
+  const selected = batchSelection.value.filter(batchDoesImportable)
+  if (!selected.length) return ElMessage.warning('请至少勾选一份有效的药物文档')
+  batchImporting.value = true
+  try {
+    const res = await adminApi.batchImportDocuments(
+      selected.map((r) => ({ name: r.name, content: r.content })),
+    )
+    ElMessage.success(`已导入 ${res.imported} 份，${res.results.filter((r) => !r.ok).length} 份失败`)
+    batchDialog.value = false
+    refreshDocs()
+    void refreshIndex()
+  } catch (e) {
+    ElMessage.error((e as Error).message || '批量导入失败')
+  } finally {
+    batchImporting.value = false
   }
 }
 
@@ -336,6 +431,8 @@ function fmtSize(n: number) {
           <div class="panel-actions">
             <el-button type="primary" @click="saveDoc">保存文档</el-button>
             <el-button @click="docName = ''; docContent = ''">清空</el-button>
+            <el-button type="warning" @click="openBatchFiles">批量导入 TXT</el-button>
+            <input ref="batchInput" type="file" accept=".txt" multiple style="display:none" @change="onBatchFiles" />
           </div>
           <p class="hint">文件名即为药品名。保存后需到「索引管理」点击重建，改动才会进入检索。</p>
         </section>
@@ -496,6 +593,51 @@ function fmtSize(n: number) {
         <el-button type="primary" @click="submitReview">提交</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="batchDialog" title="批量导入清单" width="780px" top="6vh">
+      <el-alert
+        title="黄色标记的文档缺少可选章节，红色标记缺少必填章节（必填缺失无法导入）。可点「编辑」补全后再勾选。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="batch-alert"
+      />
+      <el-table :data="batchRows" border stripe max-height="420" @selection-change="(v: BatchRow[]) => (batchSelection = v)">
+        <el-table-column type="selection" width="46" align="center" :selectable="batchSelectable" />
+        <el-table-column label="药品名" prop="name" min-width="150" show-overflow-tooltip />
+        <el-table-column label="完整性" width="210" align="center">
+          <template #default="{ row }">
+            <template v-if="row.missing_required.length">
+              <el-tag type="danger" size="small">缺必填：{{ row.missing_required.join('、') }}</el-tag>
+            </template>
+            <template v-else-if="row.missing_optional.length">
+              <el-tag type="warning" size="small">缺可选：{{ row.missing_optional.slice(0, 3).join('、') }}{{ row.missing_optional.length > 3 ? '…' : '' }}</el-tag>
+            </template>
+            <el-tag v-else type="success" size="small">完整</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="center">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openBatchEdit(row)">编辑</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="batchDialog = false">取消</el-button>
+        <el-button type="primary" :loading="batchImporting" @click="submitBatch">
+          导入勾选项
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="batchEditDialog" title="编辑药物文档" width="720px" top="8vh">
+      <el-input v-model="batchEditContent" type="textarea" :rows="12" placeholder="按【章节】结构化内容" />
+      <p class="hint">保存后会自动刷新该行的完整性状态。</p>
+      <template #footer>
+        <el-button @click="batchEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveBatchEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -589,6 +731,9 @@ function fmtSize(n: number) {
   border: 1px solid #b7eb8f;
   border-radius: 6px;
   padding: 8px 14px;
+}
+.batch-alert {
+  margin-bottom: 12px;
 }
 .hint {
   margin: 12px 0 0;

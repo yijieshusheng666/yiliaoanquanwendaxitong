@@ -65,6 +65,30 @@ export function analyzeDocument(content: string) {
   return api.post<CompletenessResult>('/api/admin/documents/analyze', { raw_text: content })
 }
 
+export interface BatchItem {
+  name: string
+  content: string
+}
+
+export interface BatchImportResultItem {
+  name: string
+  ok: boolean
+  error?: string
+  existed?: boolean
+  missing_required?: string[]
+  missing_optional?: string[]
+}
+
+export interface BatchImportResult {
+  ok: boolean
+  imported: number
+  results: BatchImportResultItem[]
+}
+
+export function batchImportDocuments(items: BatchItem[]) {
+  return api.post<BatchImportResult>('/api/admin/documents/batch-import', { items })
+}
+
 export function deleteDocument(name: string) {
   return api.del<{ ok: boolean }>(`/api/admin/documents/${encodeURIComponent(name)}`)
 }
